@@ -75,7 +75,7 @@ describe("uns-kit create --bundle", () => {
     expect(packageJson.unsDatahub).toEqual({
       schemaVersion: 1,
       kind: "addon",
-      controllerCompatibility: ">=7.1 <8",
+      controllerCompatibility: ">=2 <3",
     });
 
     const configJson = JSON.parse(await readFile(path.join(targetDir, "config.json"), "utf8")) as {
@@ -87,14 +87,27 @@ describe("uns-kit create --bundle", () => {
       project: "industry40",
     });
 
-    const configLocalhost = JSON.parse(await readFile(path.join(targetDir, "config-localhost.json"), "utf8")) as {
-      infra?: { host?: string };
-      output?: { host?: string };
-      input?: { host?: string };
-    };
-    expect(configLocalhost.infra?.host).toBe("localhost");
-    expect(configLocalhost.output?.host).toBe("localhost");
-    expect(configLocalhost.input?.host).toBe("localhost");
+    const configDevelopmentHost = JSON.parse(
+      await readFile(path.join(targetDir, "config-development-host.json"), "utf8"),
+    ) as { uns?: Record<string, unknown>; infra?: { host?: string }; input?: unknown; output?: unknown };
+    const configDevelopmentPodman = JSON.parse(
+      await readFile(path.join(targetDir, "config-development-podman.json"), "utf8"),
+    ) as { uns?: Record<string, unknown>; infra?: { host?: string } };
+    const configProduction = JSON.parse(
+      await readFile(path.join(targetDir, "config-production.json"), "utf8"),
+    ) as { uns?: Record<string, unknown>; infra?: { host?: string } };
+    expect(configDevelopmentHost.infra?.host).toBe("localhost");
+    expect(configDevelopmentHost.uns?.processName).toBe("uns-example-service");
+    expect(configDevelopmentHost.uns?.env).toBe("dev");
+    expect(configDevelopmentHost.uns?.email).toBeUndefined();
+    expect(configDevelopmentHost.uns?.password).toBeUndefined();
+    expect(configDevelopmentHost.input).toBeUndefined();
+    expect(configDevelopmentHost.output).toBeUndefined();
+    expect(configDevelopmentPodman.infra?.host).toBe("mosquitto");
+    expect(configDevelopmentPodman.uns?.processName).toBe("uns-example-service");
+    expect(configProduction.infra?.host).toBe("mosquitto");
+    expect(configProduction.uns?.env).toBe("prod");
+    expect(await readFile(path.join(targetDir, ".env.example"), "utf8")).toContain("UNS_SERVICE_TOKEN");
 
     const indexTs = await readFile(path.join(targetDir, "src", "index.ts"), "utf8");
     expect(indexTs).toContain("createUnsMqttProxy");
@@ -242,7 +255,7 @@ describe("uns-kit create --bundle", () => {
     expect(packageJson.unsDatahub).toEqual({
       schemaVersion: 1,
       kind: "addon",
-      controllerCompatibility: ">=7.1 <8",
+      controllerCompatibility: ">=2 <3",
     });
   });
 });

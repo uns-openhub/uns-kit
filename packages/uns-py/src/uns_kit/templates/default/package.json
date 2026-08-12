@@ -6,7 +6,7 @@
   "unsDatahub": {
     "schemaVersion": 1,
     "kind": "addon",
-    "controllerCompatibility": ">=7.1 <8"
+    "controllerCompatibility": ">=2 <3"
   },
   "scripts": {
     "generate-config-schema": "poetry run uns-kit-py generate-config-schema"

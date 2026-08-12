@@ -18,7 +18,19 @@ pnpm run sync-uns-metadata -- --controller-url http://localhost:3200 --token <me
 
 ## Configuration
 
-Update `config.json` with your broker, UNS URLs, and credentials. The generated file contains sensible defaults for local development. If you use a service token, add `uns.token` and pass it to `UnsClient`.
+The generator provides three committed, credential-free runtime profiles. Copy
+the appropriate profile to the untracked `config.json` before running the app:
+
+| Profile | Use it when | MQTT | Service credential |
+|---|---|---|---|
+| `config-development-host.json` | Running `pnpm run dev` directly on the host | `localhost` | `.env` → `UNS_SERVICE_TOKEN` |
+| `config-development-podman.json` | Deploying through a local Podman OpenHub controller | `mosquitto` | Controller-managed `UNS_SERVICE_TOKEN_FILE` |
+| `config-production.json` | Creating a production controller instance | `mosquitto` | Controller-managed token file or approved secret provider |
+
+The profiles contain neither a token nor `uns.email`/`uns.password`. For a
+direct host process, copy `.env.example` to `.env`, set a development machine
+token, and keep that file untracked. Controller-managed instances receive the
+mounted token file and controller identity automatically.
 
 For standalone local development, `pnpm run dev` and `pnpm run start` load a
 local `.env` file when it exists. The generated `.gitignore` excludes `.env`
@@ -86,15 +98,18 @@ asset path and `asset` is the leaf sub-asset.
 
 ## Datahub client (last value)
 
-`UnsClient` provides a minimal REST client for the UNS OpenHub API, including the batch last-value endpoint. Prefer a long-lived service token if available; you can pass it directly and skip username/password auth.
+`UnsClient` provides a minimal REST client for the UNS OpenHub API, including the batch last-value endpoint. Prefer the controller-managed token file or a development machine token; do not place it in a tracked config file.
 
 ```ts
-import { ConfigFile, UnsClient } from "@uns-kit/core";
+import { ConfigFile, ServiceTokenProvider, UnsClient } from "@uns-kit/core";
 
 const config = await ConfigFile.loadConfig();
 
+const tokenProvider = new ServiceTokenProvider({
+  configToken: typeof config.uns.token === "string" ? config.uns.token : undefined,
+});
 const client = new UnsClient("https://datahub.example.com", {
-  token: process.env.UNS_SERVICE_TOKEN ?? config.uns.token,
+  tokenProvider,
 });
 
 const values = await client.lastValue([

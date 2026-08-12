@@ -29,5 +29,6 @@ Pointers for AI/code-assist tools when working in this generated project.
 - When crossing `<2.0.71` to `>=2.0.71`, inspect MQTT proxy ownership and follow the documented shutdown migration. Process-owned and standalone proxies have different shutdown paths.
 - When crossing `<3.0.0` to `>=3.0.0`, migrate MQTT `message.table.columns` publishers from named arrays to named objects and consumers to object-entry iteration. Keep schema `tableColumns` and Assistant/UI table formats unchanged.
 - When crossing `<3.0.7` to `>=3.0.7`, update the application's direct `zod` dependency to Zod 4, migrate Zod-3-only project config extension APIs, and regenerate `config.schema.json` plus `src/config/app-config.ts`.
+- When crossing `<3.0.11` to `>=3.0.11` for an OpenHub 2.x add-on, replace the old `>=7.1 <8` manifest range with `>=2 <3` only after compatibility validation, then use the three credential-free runtime profiles and `ServiceTokenProvider` guidance in `MIGRATIONS.md`.
 
 <!-- uns-kit:migrations:end -->

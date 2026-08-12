@@ -38,7 +38,7 @@ tmp-rtt
 !.env.sample
 
 # UNS configuration overrides
-config*.json
+config.json
 
 # Editor files & OS cruft
 .idea/

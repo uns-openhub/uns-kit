@@ -63,18 +63,15 @@ These CLI helpers are useful for diagnostics and low-level checks. For applicati
 
 ## Datahub client (last value)
 
-`UnsClient` provides a minimal REST client for the UNS OpenHub API, including the batch last-value endpoint. For service-to-service access, prefer passing a long-lived service token directly. Use `AuthClient` only when you need user login/refresh behavior.
+`UnsClient` provides a minimal REST client for the UNS OpenHub API, including the batch last-value endpoint. For service-to-service access, prefer the controller-managed token file or a development machine token. Use `AuthClient` only when you need user login/refresh behavior.
 
 ```python
 from pathlib import Path
-from uns_kit.core import ConfigFile, UnsClient
+from uns_kit.core import ConfigFile, ServiceTokenProvider, UnsClient
 
 cfg = ConfigFile.load_config(Path("config.json"))
-client = UnsClient(
-    cfg["uns"]["rest"],
-    api_base_path="/api",
-    token=cfg["uns"].get("token"),
-)
+token_provider = ServiceTokenProvider(config_token=cfg["uns"].get("token"))
+client = UnsClient(cfg["uns"]["rest"], api_base_path="/api", token_provider=token_provider)
 
 values = client.last_value([
     "raw/data/line-1/motor/main/temperature",
@@ -86,8 +83,21 @@ print(values)
 ## Status topics
 The default `src/main.py` starts an `UnsProxyProcess`, creates an output proxy, and publishes a sample UNS topic through that proxy.
 
-## Config
-Edit `config.json` with your MQTT host/auth (TS-style nested infra/uns structure).
+## Configuration
+
+The generated project contains three committed, credential-free runtime
+profiles. Copy the appropriate profile to untracked `config.json` before
+starting the process:
+
+| Profile | Use it when | MQTT | Service credential |
+|---|---|---|---|
+| `config-development-host.json` | Running directly on the host | `localhost` | `UNS_SERVICE_TOKEN` in the process environment |
+| `config-development-podman.json` | Deploying through a local Podman controller | `mosquitto` | Controller-managed `UNS_SERVICE_TOKEN_FILE` |
+| `config-production.json` | Creating a production controller instance | `mosquitto` | Controller-managed token file or approved secret provider |
+
+Do not put a service token, user email, password, MQTT password, or customer
+endpoint into a committed profile. A controller-managed token file is read on
+every request by `ServiceTokenProvider`, so rotations do not require a restart.
 
 ## Extend the config schema
 Edit `src/config/project_config_extension.py` and run:

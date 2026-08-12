@@ -15,21 +15,9 @@
     "handover": true,
     "jwksWellKnownUrl": "http://localhost:3200/api/.well-known/jwks.json",
     "kidWellKnownUrl": "http://localhost:3200/api/.well-known/kid",
-    "email": "user@example-org.com",
-    "password": "secret"
+    "env": "dev"
   },
   "infra": {
-    "host": "localhost"
-  },
-  "output": {
-    "host": "localhost"
-  },
-  "input": {
-    "host": "localhost"
-  },
-  "devops": {
-    "provider": "azure-devops",
-    "organization": "example-org",
-    "project": "example-project"
+    "host": "mosquitto"
   }
 }

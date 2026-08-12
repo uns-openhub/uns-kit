@@ -42,11 +42,24 @@ def test_create_from_valid_python_bundle(tmp_path: Path, monkeypatch) -> None:
     assert config["devops"]["project"] == "industry40"
     assert config["uns"]["supervisor"]["enabled"] is False
     assert config["uns"]["supervisor"]["maxMemoryMb"] == 512
+    for filename, expected_host, expected_env in (
+        ("config-development-host.json", "localhost", "dev"),
+        ("config-development-podman.json", "mosquitto", "dev"),
+        ("config-production.json", "mosquitto", "prod"),
+    ):
+        profile = json.loads((target / filename).read_text())
+        assert profile["infra"]["host"] == expected_host
+        assert profile["uns"]["processName"] == "uns-example-service"
+        assert profile["uns"]["env"] == expected_env
+        assert "email" not in profile["uns"]
+        assert "password" not in profile["uns"]
+        assert "input" not in profile
+        assert "output" not in profile
     package_json = json.loads((target / "package.json").read_text())
     assert package_json["unsDatahub"] == {
         "schemaVersion": 1,
         "kind": "addon",
-        "controllerCompatibility": ">=7.1 <8",
+        "controllerCompatibility": ">=2 <3",
     }
 
 
@@ -140,7 +153,7 @@ def test_legacy_create_name_still_works(tmp_path: Path, monkeypatch) -> None:
     assert package_json["unsDatahub"] == {
         "schemaVersion": 1,
         "kind": "addon",
-        "controllerCompatibility": ">=7.1 <8",
+        "controllerCompatibility": ">=2 <3",
     }
 
 
@@ -157,7 +170,7 @@ def test_upgrade_adds_addon_metadata_and_preserves_it(tmp_path: Path) -> None:
     assert first_package["unsDatahub"] == {
         "schemaVersion": 1,
         "kind": "addon",
-        "controllerCompatibility": ">=7.1 <8",
+        "controllerCompatibility": ">=2 <3",
     }
 
     first_package["unsDatahub"] = {"schemaVersion": 2, "kind": "custom"}
@@ -216,7 +229,7 @@ def test_configure_vscode_adds_json_schema_mapping(tmp_path: Path, monkeypatch) 
     assert vscode_result.exit_code == 0, vscode_result.output
 
     settings = json.loads((vscode_dir / "settings.json").read_text())
-    assert {"fileMatch": ["config.json"], "url": "./config.schema.json"} in settings["json.schemas"]
+    assert {"fileMatch": ["config.json", "config-*.json"], "url": "./config.schema.json"} in settings["json.schemas"]
 
 
 def test_legacy_create_uses_proxy_based_uns_publishing_pattern(tmp_path: Path, monkeypatch) -> None:

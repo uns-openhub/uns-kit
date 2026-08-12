@@ -32,7 +32,7 @@ CLI_PROG_NAME = "uns-kit-py"
 DEFAULT_UNS_DATAHUB_ADDON_METADATA = {
     "schemaVersion": 1,
     "kind": "addon",
-    "controllerCompatibility": ">=7.1 <8",
+    "controllerCompatibility": ">=2 <3",
 }
 
 
@@ -216,6 +216,7 @@ def _scaffold_python_project(target_path: Path, project_name: str, *, allow_exis
 
     config_path = target_path / "config.json"
     _write_config_file(config_path, project_name)
+    _write_runtime_profiles(target_path, project_name)
     generate_config_schema(target_path)
 
     if pyproject_path.exists():
@@ -319,14 +320,14 @@ def _print_python_create_success(target_path: Path, initialized_git: bool) -> No
         click.echo(f"  1) cd {target_path}")
         click.echo("  2) poetry install")
         click.echo("  3) poetry run python src/main.py")
-        click.echo("  4) Edit config.json with your MQTT host/credentials")
+        click.echo("  4) Copy a tracked config-development profile to config.json and set local secrets outside Git")
         if initialized_git:
             click.echo("  5) git status  # verify the new repository")
         return
 
     click.echo("  1) poetry install")
     click.echo("  2) poetry run python src/main.py")
-    click.echo("  3) Edit config.json with your MQTT host/credentials")
+    click.echo("  3) Copy a tracked config-development profile to config.json and set local secrets outside Git")
     if initialized_git:
         click.echo("  4) git status  # verify the new repository")
 
@@ -454,38 +455,30 @@ def _log_python_devops_result(result: Dict[str, Any], *, include_remote_details:
         click.echo("  2) Set AZURE_PAT in your CI or local env for pipeline access")
 
 
-def _write_config_file(path: Path, project_name: Optional[str] = None) -> None:
-    project_name = project_name or path.resolve().parent.name
+def _runtime_profile(project_name: str, profile: str) -> Dict[str, Any]:
     sanitized = TopicBuilder.sanitize_topic_part(project_name)
-    data = {
+    is_host_development = profile == "development-host"
+    is_production = profile == "production"
+    return {
         "$schema": "./config.schema.json",
         "infra": {
-            "host": "localhost",
+            "host": "localhost" if is_host_development else "mosquitto",
             "port": 1883,
-            "username": "",
-            "password": "",
             "tls": False,
             "clientId": sanitized,
             "mqttSubToTopics": [],
             "keepalive": 60,
             "clean": True,
         },
-        "output": {
-            "host": "localhost",
-        },
-        "input": {
-            "host": "localhost",
-        },
         "uns": {
             "graphql": "http://localhost:3200/graphql",
             "rest": "http://localhost:3200/api",
-            "email": "admin@example.com",
-            "password": "123",
             "processName": sanitized,
-            "instanceMode": "force",
-            "handover": False,
+            "instanceMode": "wait",
+            "handover": True,
             "jwksWellKnownUrl": "http://localhost:3200/api/.well-known/jwks.json",
             "kidWellKnownUrl": "http://localhost:3200/api/.well-known/kid",
+            "env": "prod" if is_production else "dev",
             "supervisor": {
                 "enabled": False,
                 "restartOnExit": False,
@@ -495,13 +488,23 @@ def _write_config_file(path: Path, project_name: Optional[str] = None) -> None:
                 "restartCooldownMs": 300000,
             },
         },
-        "devops": {
-            "provider": "azure-devops",
-            "organization": "example-org",
-            "project": "example-project",
-        },
     }
-    path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def _write_config_file(path: Path, project_name: Optional[str] = None) -> None:
+    project_name = project_name or path.resolve().parent.name
+    path.write_text(json.dumps(_runtime_profile(project_name, "development-host"), indent=2) + "\n")
+
+
+def _write_runtime_profiles(target_path: Path, project_name: str) -> None:
+    profiles = {
+        "config-development-host.json": "development-host",
+        "config-development-podman.json": "development-podman",
+        "config-production.json": "production",
+    }
+    for filename, profile in profiles.items():
+        path = target_path / filename
+        path.write_text(json.dumps(_runtime_profile(project_name, profile), indent=2) + "\n")
 
 
 @cli.command("generate-config-schema", help="Generate config.schema.json from the core schema and project extension.")
@@ -675,7 +678,7 @@ def _merge_vscode_schema_mapping(settings_path: Path) -> None:
         raise click.ClickException(f"Expected json.schemas to be an array in {settings_path}.")
 
     mapping = {
-        "fileMatch": ["config.json"],
+        "fileMatch": ["config.json", "config-*.json"],
         "url": "./config.schema.json",
     }
     if mapping not in schemas:

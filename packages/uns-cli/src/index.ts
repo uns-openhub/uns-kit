@@ -568,7 +568,7 @@ type PackageJson = {
 const DEFAULT_UNS_DATAHUB_ADDON_METADATA = {
   schemaVersion: 1,
   kind: "addon",
-  controllerCompatibility: ">=7.1 <8",
+  controllerCompatibility: ">=2 <3",
 } as const;
 
 function ensureUnsDatahubAddonMetadata(pkg: PackageJson): boolean {
@@ -666,6 +666,7 @@ const AGENT_MIGRATION_BLOCK = [
   "- When crossing `<2.0.71` to `>=2.0.71`, inspect MQTT proxy ownership and follow the documented shutdown migration. Process-owned and standalone proxies have different shutdown paths.",
   "- When crossing `<3.0.0` to `>=3.0.0`, migrate MQTT `message.table.columns` publishers from named arrays to named objects and consumers to object-entry iteration. Keep schema `tableColumns` and Assistant/UI table formats unchanged.",
   "- When crossing `<3.0.7` to `>=3.0.7`, update the application's direct `zod` dependency to Zod 4, migrate Zod-3-only project config extension APIs, and regenerate `config.schema.json` plus `src/config/app-config.ts`.",
+  "- When crossing `<3.0.11` to `>=3.0.11` for an OpenHub 2.x add-on, replace the old `>=7.1 <8` manifest range with `>=2 <3` only after compatibility validation, then use the three credential-free runtime profiles and `ServiceTokenProvider` guidance in `MIGRATIONS.md`.",
   AGENT_MIGRATION_END,
 ].join("\n");
 
@@ -2065,16 +2066,23 @@ async function replacePlaceholders(targetDir: string, packageName: string): Prom
     __APP_CONFIG__: deriveConfigIdentifier(configFilePath),
   };
 
+  const profileFiles = [
+    configFilePath,
+    path.join(targetDir, "config-development-host.json"),
+    path.join(targetDir, "config-development-podman.json"),
+    path.join(targetDir, "config-production.json"),
+  ];
+
   const filesToUpdate = [
     path.join(targetDir, "README.md"),
     path.join(targetDir, "src/index.ts"),
-    configFilePath,
+    ...profileFiles,
   ];
 
   for (const file of filesToUpdate) {
     try {
       await access(file);
-      if (path.resolve(file) === path.resolve(configFilePath)) {
+      if (profileFiles.some(profileFile => path.resolve(file) === path.resolve(profileFile))) {
         await replaceConfigTemplatePlaceholders(file, replacements, packageName);
         continue;
       }

@@ -35,7 +35,7 @@ describe("uns-kit upgrade", () => {
     expect(firstPackage.unsDatahub).toEqual({
       schemaVersion: 1,
       kind: "addon",
-      controllerCompatibility: ">=7.1 <8",
+      controllerCompatibility: ">=2 <3",
     });
 
     const secondResult = runTsCli(targetDir, ["upgrade"]);

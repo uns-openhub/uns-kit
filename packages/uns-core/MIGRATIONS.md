@@ -9,6 +9,33 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.11 - OpenHub runtime profiles and add-on compatibility
+
+Apply this migration when upgrading from `@uns-kit/cli` or `@uns-kit/core`
+`<3.0.11` to `>=3.0.11` for an application that is deployed by an OpenHub 2.x
+controller.
+
+New TypeScript and Python projects now use `controllerCompatibility: ">=2 <3"`
+and receive three credential-free profiles:
+
+- `config-development-host.json` for a directly started host process;
+- `config-development-podman.json` for a process deployed through a local
+  Podman controller; and
+- `config-production.json` for a production controller instance.
+
+Keep only the selected copy as the untracked `config.json`. Do not commit a
+token, user email/password, MQTT password, or customer endpoint in any tracked
+profile. Direct host development uses `UNS_SERVICE_TOKEN` and the local
+controller identity in `.env`; controller-managed instances receive
+`UNS_SERVICE_TOKEN_FILE` and `UNS_CONTROLLER_*` from PM2. Use
+`ServiceTokenProvider` for any controller or controller-proxied API call so a
+mounted token rotation is used without restarting the service.
+
+Existing applications remain valid, but their old `>=7.1 <8` manifests are not
+deployable by an OpenHub 2.x controller. Update that range only when the
+application is compatible with the 2.x runtime API, regenerate its
+configuration schema, and validate each selected profile before release.
+
 ## 3.0.10 - Managed RTT service registration
 
 Apply this migration when upgrading from `@uns-kit/core` `<3.0.10` to
