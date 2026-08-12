@@ -238,19 +238,19 @@ separate physical table family while the UNS path still comes from
 
 ### Datahub client (last value + history)
 
-`UnsClient` provides a minimal REST client for the UNS OpenHub API, including batch last-value, single-topic catch-all history, and batch range endpoints. For service-to-service access, prefer passing a long-lived service token directly. Use `AuthClient` only when you need user-style login/refresh from `config.json`.
+`UnsClient` provides a minimal REST client for the UNS OpenHub API, including batch last-value, single-topic catch-all history, and batch range endpoints. A controller-managed RTT service should use `ServiceTokenProvider`; it reads the short-lived token file mounted by the controller for every request. Direct local development can use `.env`/exported `UNS_SERVICE_TOKEN`, a resolved `uns.token`, or an explicit `AuthClient` fallback.
 
 ```python
 import pandas as pd
 from pathlib import Path
-from uns_kit.core import ConfigFile, UnsClient
+from uns_kit.core import ConfigFile, ServiceTokenProvider, UnsClient
 import io
 
 cfg = ConfigFile.load_config(Path("config.json"))
 client = UnsClient(
     cfg["uns"]["rest"],
     api_base_path="/api",
-    token=cfg["uns"].get("token"),
+    token_provider=ServiceTokenProvider(config_token=cfg["uns"].get("token")),
 )
 
 values = client.last_value([
@@ -298,10 +298,13 @@ When several modules in one application use the same REST client, register it
 once during startup and retrieve the same named instance wherever it is needed:
 
 ```python
-from uns_kit import get_uns_client, register_uns_client
+from uns_kit import ServiceTokenProvider, get_uns_client, register_uns_client
 
 # application startup
-register_uns_client(cfg["uns"]["rest"], token=cfg["uns"].get("token"))
+register_uns_client(
+    cfg["uns"]["rest"],
+    token_provider=ServiceTokenProvider(config_token=cfg["uns"].get("token")),
+)
 
 # handler or another application module
 client = get_uns_client()
@@ -312,15 +315,31 @@ Use distinct names when the application needs clients for more than one UNS
 OpenHub endpoint: `register_uns_client(url, name="secondary")` and
 `get_uns_client("secondary")`.
 
-If your service token comes from an environment variable or secret store, resolve it before constructing the client:
+For a directly started local service, load its `.env` by the application and use the provider. Do not set `RTT_NODE` or `RTT_INSTANCE_ID` yourself; those identifiers are injected only by the controller.
 
 ```python
-import os
-from uns_kit.core import UnsClient
+from uns_kit.core import ServiceTokenProvider, UnsClient
 
 client = UnsClient(
     "https://datahub.example.com",
-    token=os.environ["UNS_SERVICE_TOKEN"],
+    token_provider=ServiceTokenProvider(),
+)
+```
+
+After a Python service has successfully started its MQTT/API runtime, it can register its non-secret descriptor when managed by the controller. This is a no-op in direct local development:
+
+```python
+from uns_kit.core import RuntimeServiceDescriptor, register_service
+
+register_service(
+    client,
+    RuntimeServiceDescriptor(
+        id="uns-example",
+        version="1.2.3",
+        capabilities=["example-api"],
+        health_contract="service-metadata-v1",
+        process_name="uns-example",
+    ),
 )
 ```
 

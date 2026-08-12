@@ -9,6 +9,20 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.10 - Managed RTT service registration
+
+Apply this migration when upgrading from `@uns-kit/core` `<3.0.10` to
+`>=3.0.10` for an RTT service that must prove it started under the controller
+that manages its instance.
+
+After the service has successfully started its MQTT/API runtime, construct an
+`UnsClient` with `ServiceTokenProvider` and call `registerService`. Use the
+controller-injected `RTT_NODE` and `RTT_INSTANCE_ID` only through that helper;
+the helper verifies the descriptor id and sends no credentials. A directly
+started development process has neither variable, so `registerService` is a
+deliberate no-op. Do not synthesize those variables or create an identity in
+application configuration.
+
 ## 3.0.9 - MQTT channel inheritance
 
 Apply this migration when upgrading from `@uns-kit/core` `<3.0.9` to

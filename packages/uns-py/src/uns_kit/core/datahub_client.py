@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Mapping, Optional, Sequence, TYPE_CHECKING, TypedDict, Unpack
 
 from .auth_client import AuthClient
+from .service_token_provider import AccessTokenProvider
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -191,6 +192,7 @@ class UnsClient:
         *,
         api_base_path: str = "/api",
         token: Optional[str] = None,
+        token_provider: Optional[AccessTokenProvider] = None,
         auth_client: Optional[AuthClient] = None,
         timeout: float = 10.0,
     ) -> None:
@@ -204,6 +206,7 @@ class UnsClient:
             self.api_url = f"{stripped_base_url}{self.api_base_path}"
         self.manual_access_token = token
         self.access_token = token
+        self.token_provider = token_provider
         self.timeout = timeout
         self.auth_client = auth_client
         self._opener = urllib.request.build_opener()
@@ -215,6 +218,11 @@ class UnsClient:
     def ensure_token(self) -> Optional[str]:
         if self.manual_access_token:
             return self.manual_access_token
+        if self.token_provider:
+            service_token = self.token_provider.get_access_token()
+            if service_token:
+                self.access_token = service_token
+                return service_token
         try:
             if self.auth_client is None:
                 self.auth_client = AuthClient.create()
@@ -434,6 +442,7 @@ class UnsClientManager:
         *,
         api_base_path: str = "/api",
         token: Optional[str] = None,
+        token_provider: Optional[AccessTokenProvider] = None,
         auth_client: Optional[AuthClient] = None,
         timeout: float = 10.0,
     ) -> UnsClient:
@@ -441,6 +450,7 @@ class UnsClientManager:
             base_url,
             api_base_path=api_base_path,
             token=token,
+            token_provider=token_provider,
             auth_client=auth_client,
             timeout=timeout,
         )
@@ -484,6 +494,7 @@ def register_uns_client(
     name: str = "default",
     api_base_path: str = "/api",
     token: Optional[str] = None,
+    token_provider: Optional[AccessTokenProvider] = None,
     auth_client: Optional[AuthClient] = None,
     timeout: float = 10.0,
 ) -> UnsClient:
@@ -493,6 +504,7 @@ def register_uns_client(
         base_url,
         api_base_path=api_base_path,
         token=token,
+        token_provider=token_provider,
         auth_client=auth_client,
         timeout=timeout,
     )
@@ -506,4 +518,3 @@ def get_uns_client(name: str = "default") -> UnsClient:
 def delete_uns_client(name: str = "default") -> None:
     """Remove a named client from the process-local registry."""
     _default_uns_client_manager.delete(name)
-
