@@ -34,3 +34,10 @@ export type {
   BatchRangeTopicPayload,
   BatchRangeResponsePayload,
 } from "./tools/datahub/datahub-client.js";
+export { registerService } from "./tools/datahub/runtime-service-registration.js";
+export type {
+  RegisterServiceOptions,
+  RuntimeServiceDescriptor,
+  RuntimeServiceRegistration,
+  RuntimeServiceRegistrationClient,
+} from "./tools/datahub/runtime-service-registration.js";

@@ -1,6 +1,6 @@
 {
   "name": "@uns-kit/assistant-workflow",
-  "version": "3.0.9",
+  "version": "3.0.10",
   "description": "Typed, provider-neutral workflow definitions, policies, execution plans, and trace helpers for assistants.",
   "author": "Aljosa Vister",
   "license": "MIT",
