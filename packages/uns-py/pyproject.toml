@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "uns-kit"
-version = "0.2.4"
+version = "0.2.5"
 description = "Lightweight Python UNS MQTT client (pub/sub + infra topics)"
 authors = ["Aljoša Vister <aljosa.vister@gmail.com>"]
 license = "MIT"
