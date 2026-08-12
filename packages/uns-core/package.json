@@ -1,6 +1,6 @@
 {
   "name": "@uns-kit/core",
-  "version": "3.0.8",
+  "version": "3.0.9",
   "description": "Core utilities and runtime building blocks for UNS-based realtime transformers.",
   "type": "module",
   "license": "MIT",

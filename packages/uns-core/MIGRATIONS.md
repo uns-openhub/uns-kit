@@ -9,6 +9,19 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.9 - MQTT channel inheritance
+
+Apply this migration when upgrading from `@uns-kit/core` `<3.0.9` to
+`>=3.0.9` if an application supports optional `input` or `output` broker
+overrides.
+
+Resolve channels with `resolveMqttChannel(config.infra, config.input)` or
+`resolveMqttChannel(config.infra, config.output)`. Pass its `host` to the
+proxy constructor and `mqttChannelParameters(channel)` to the connection
+options. A partial channel override now inherits the complete `infra` broker
+configuration, including credentials, TLS material, reconnect settings,
+servers/hosts, and MQTT v5 properties. An explicit channel field still wins.
+
 ## 3.0.8 - Controller-managed service tokens
 
 Apply this migration when upgrading from `@uns-kit/core` `<3.0.8` to
