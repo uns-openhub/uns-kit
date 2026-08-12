@@ -1,4 +1,5 @@
 import { AuthClient } from "../auth/auth-client.js";
+import type { AccessTokenProvider } from "../auth/service-token-provider.js";
 
 export type LastValuePayload = {
   topic: string;
@@ -224,6 +225,8 @@ export type UnsClientOptions = {
   apiBasePath?: string;
   token?: string;
   timeoutMs?: number;
+  /** Preferred non-interactive service credential source. */
+  tokenProvider?: AccessTokenProvider;
   authClient?: AuthClient;
 };
 
@@ -237,6 +240,7 @@ export class UnsClient {
   private readonly baseUrl: string;
   private readonly apiUrl: string;
   private readonly timeoutMs: number;
+  private readonly tokenProvider?: AccessTokenProvider;
   private readonly authClient?: AuthClient;
   private manualAccessToken?: string;
 
@@ -252,6 +256,7 @@ export class UnsClient {
     }
     this.apiBasePath = apiBasePath;
     this.timeoutMs = options.timeoutMs ?? 10_000;
+    this.tokenProvider = options.tokenProvider;
     this.authClient = options.authClient;
     this.manualAccessToken = options.token;
   }
@@ -262,6 +267,8 @@ export class UnsClient {
 
   async ensureToken(): Promise<string | undefined> {
     if (this.manualAccessToken) return this.manualAccessToken;
+    const serviceToken = await this.tokenProvider?.getAccessToken();
+    if (serviceToken) return serviceToken;
     if (!this.authClient) return undefined;
     return this.authClient.getAccessToken();
   }
@@ -460,4 +467,3 @@ export class UnsClient {
     return stripped.startsWith("/") ? stripped : `/${stripped}`;
   }
 }
-

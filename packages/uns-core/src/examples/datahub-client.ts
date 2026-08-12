@@ -1,14 +1,13 @@
-import { ConfigFile, UnsClient } from "../index.js";
-import { AuthClient } from "../tools/auth/auth-client.js";
+import { AuthClient, ConfigFile, ServiceTokenProvider, UnsClient } from "../index.js";
 
 async function main(): Promise<void> {
   const config = await ConfigFile.loadConfig();
-  const configToken = typeof config.uns.token === "string" ? config.uns.token : undefined;
-  const serviceToken = process.env.UNS_SERVICE_TOKEN ?? configToken;
-  const authClient = serviceToken ? undefined : await AuthClient.create();
+  const tokenProvider = new ServiceTokenProvider({
+    configToken: typeof config.uns.token === "string" ? config.uns.token : undefined,
+    fallback: await AuthClient.create(),
+  });
   const client = new UnsClient(config.uns.rest, {
-    token: serviceToken,
-    authClient,
+    tokenProvider,
   });
 
   const valueTopic = "sij/acroni/vv/hrm-furnace/equipment/pusher/output-quantity";

@@ -2,8 +2,6 @@ import { ConfigFile } from "../../config-file.js";
 import { SecureStoreFactory, ISecureStore } from "./secure-store.js";
 import jwt from "jsonwebtoken";
 
-const cfg = await ConfigFile.loadConfig();
-
 type LoginResponse = {
   accessToken: string;
 };
@@ -15,18 +13,27 @@ type LoginResponse = {
 export class AuthClient {
   private readonly restBase: string;
   private readonly namespace: string;
+  private readonly configEmail?: string;
+  private readonly configPassword?: string;
   private store!: ISecureStore;
 
-  private constructor(restBase: string) {
+  private constructor(restBase: string, configEmail?: string, configPassword?: string) {
     this.restBase = restBase.replace(/\/$/, "");
     // namespace store by rest base to allow multiple environments
     this.namespace = `uns-auth:${this.restBase}`;
+    this.configEmail = configEmail;
+    this.configPassword = configPassword;
   }
 
   static async create(): Promise<AuthClient> {
+    const cfg = await ConfigFile.loadConfig();
     const restBase: string = cfg?.uns?.rest;
     if (!restBase) throw new Error("config.uns.rest is not set");
-    const client = new AuthClient(restBase);
+    const client = new AuthClient(
+      restBase,
+      typeof cfg?.uns?.email === "string" ? cfg.uns.email : undefined,
+      typeof cfg?.uns?.password === "string" ? cfg.uns.password : undefined,
+    );
     client.store = await SecureStoreFactory.create(client.namespace);
     return client;
   }
@@ -51,11 +58,9 @@ export class AuthClient {
     }
 
     // First try to get email and password from config
-    const configEmail = cfg?.uns?.email;
-    const configPassword = cfg?.uns?.password;
-    if (typeof configEmail === "string" && typeof configPassword === "string") {
+    if (this.configEmail && this.configPassword) {
       try {
-        const loggedIn = await this.login(configEmail, configPassword);
+        const loggedIn = await this.login(this.configEmail, this.configPassword);
         await this.persistTokens(loggedIn.accessToken, loggedIn.refreshToken);
         return loggedIn.accessToken;
       } catch (error) {

@@ -11,6 +11,8 @@ export { ConfigFile } from "./config-file.js";
 export { default as logger } from "./logger.js";
 export { getLogger } from "./logger.js";
 export { resolveInfisicalConfig } from "./uns-config/secret-resolver.js";
+export { AuthClient, ServiceTokenProvider } from "./tools/auth/index.js";
+export type { AccessTokenProvider, ServiceTokenProviderOptions } from "./tools/auth/index.js";
 export {
   UnsClient,
   LastValueResult,
@@ -30,4 +32,3 @@ export type {
   BatchRangeTopicPayload,
   BatchRangeResponsePayload,
 } from "./tools/datahub/datahub-client.js";
-

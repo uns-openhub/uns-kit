@@ -1,6 +1,6 @@
 {
   "name": "@uns-kit/cron",
-  "version": "3.0.7",
+  "version": "3.0.8",
   "description": "Cron-driven plugin for UnsProxyProcess that emits UNS events on a schedule.",
   "type": "module",
   "license": "MIT",

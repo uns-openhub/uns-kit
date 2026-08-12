@@ -9,6 +9,24 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.8 - Controller-managed service tokens
+
+Apply this migration when upgrading from `@uns-kit/core` `<3.0.8` to
+`>=3.0.8` for RTT services that call a DataHub controller or a controller-
+proxied API.
+
+Use `ServiceTokenProvider` as the `UnsClient` `tokenProvider`. It reads the
+controller-mounted `UNS_SERVICE_TOKEN_FILE` first, then `UNS_SERVICE_TOKEN`,
+then the resolved `uns.token` configuration value. Keep `AuthClient` only as a
+legacy local-development fallback for services that still have
+`uns.email`/`uns.password`.
+
+When `UNS_SERVICE_TOKEN_FILE` is set, it is authoritative. A missing or empty
+file is an error; do not fall back to a user credential or copy the token into
+the service configuration. The provider re-reads the mounted file for each
+request, so the controller can rotate credentials atomically without restarting
+the RTT process.
+
 ## 3.0.7 - Zod 4 configuration contracts
 
 Apply this migration when upgrading from `@uns-kit/core` `<3.0.7` to
