@@ -1,6 +1,6 @@
 {
   "name": "@uns-kit/database",
-  "version": "3.0.11",
+  "version": "3.0.12",
   "description": "Database helpers for UNS services with config-driven connections, SQL file loading, and portable named-parameter compilation.",
   "type": "module",
   "license": "MIT",
