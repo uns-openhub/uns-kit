@@ -16,7 +16,7 @@ const require = createRequire(import.meta.url);
 const tsxCliPath = require.resolve("tsx/cli");
 const repoRoot = process.cwd();
 const generatorEntry = path.resolve(repoRoot, "packages/uns-core/src/tools/generate-config-schema.ts");
-const zod3JsonContractDigest = "21fd89c43117f72aef9762cb14fbc183704b2e06df2e0c7733564cc920c7cc97";
+const zod3JsonContractDigest = "7c54af9ab1bbbd6bbf08356c32fd078c44951c9c55267aa6428b2e4a9cec9c3c";
 const tempDirs: string[] = [];
 
 afterEach(async () => {

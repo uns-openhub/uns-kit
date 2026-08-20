@@ -19,10 +19,13 @@ uns-kit that does not echo the id.
 
 Existing applications need no configuration or source change: without this
 value their MQTT messages remain byte-for-byte compatible with the legacy
-handover protocol. A controller should inject the value only for a durable,
-operator-initiated migration and must still accept an acknowledgement without
-the id from a legacy target. The value is correlation metadata, not a secret;
-do not use it as an authorization or fencing token.
+handover protocol. To opt an RTT target into controller-coordinated hot
+migration, set `uns.handoverProtocol: "correlated-v1"` alongside
+`uns.instanceMode: "handover"` and `uns.handover: true`. A controller should
+inject the value only for a durable, operator-initiated migration and must
+still accept an acknowledgement without the id from a legacy target. The value
+is correlation metadata, not a secret; do not use it as an authorization or
+fencing token.
 
 ## 3.0.12 - Expiring retained handover heartbeats
 
