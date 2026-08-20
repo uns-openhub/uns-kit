@@ -9,6 +9,23 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.15 - Secret references in database configuration
+
+`@uns-kit/database` now accepts the standard environment and Infisical secret
+references for database connection values that are resolved before a client is
+opened: PostgreSQL/Oracle host, database, user, password, Oracle connect
+string/service name/SID, and PostgreSQL TLS material. Database adapters reject
+an unresolved reference with a clear startup error rather than passing an
+object to the database driver.
+
+Applications using `databasesConfigSchema` should upgrade their direct
+`@uns-kit/database` dependency with the aligned `@uns-kit/*` release and
+regenerate `config.schema.json`. Applications with their own project schema
+must replace `z.string()` with `secretValueSchema` for any configured value
+that is intentionally stored as an environment or Infisical reference. Do not
+widen ordinary labels, topic names, paths, or other non-secret settings merely
+because they are strings.
+
 ## 3.0.13 - Optional controller-correlated handovers
 
 `UnsProxyProcess` accepts an optional `handoverId` parameter or

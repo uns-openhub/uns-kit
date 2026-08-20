@@ -1,10 +1,14 @@
 import logger from "@uns-kit/core/logger.js";
+
+import { type PostgresDatabaseConfig, requireResolvedDatabaseString } from "../schema.js";
 import type { DatabaseAdapter, DatabaseQueryResult } from "../types.js";
 import type { CompiledSqlStatement } from "../types.js";
-import type { PostgresDatabaseConfig } from "../schema.js";
 
 type PgPool = {
-  query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{
+  query<T = Record<string, unknown>>(
+    text: string,
+    values?: unknown[],
+  ): Promise<{
     rows: T[];
     rowCount?: number | null;
   }>;
@@ -14,7 +18,10 @@ type PgPool = {
 
 type PgClient = {
   connect(): Promise<void>;
-  query<T = Record<string, unknown>>(text: string, values?: unknown[]): Promise<{
+  query<T = Record<string, unknown>>(
+    text: string,
+    values?: unknown[],
+  ): Promise<{
     rows: T[];
     rowCount?: number | null;
   }>;
@@ -33,10 +40,10 @@ function buildPgSsl(config: PostgresDatabaseConfig): unknown {
 
   return {
     rejectUnauthorized: config.ssl.rejectUnauthorized,
-    ca: config.ssl.ca,
-    cert: config.ssl.cert,
-    key: config.ssl.key,
-    servername: config.ssl.servername,
+    ca: config.ssl.ca === undefined ? undefined : requireResolvedDatabaseString(config.ssl.ca, "ssl.ca"),
+    cert: config.ssl.cert === undefined ? undefined : requireResolvedDatabaseString(config.ssl.cert, "ssl.cert"),
+    key: config.ssl.key === undefined ? undefined : requireResolvedDatabaseString(config.ssl.key, "ssl.key"),
+    servername: config.ssl.servername === undefined ? undefined : requireResolvedDatabaseString(config.ssl.servername, "ssl.servername"),
   };
 }
 
@@ -48,21 +55,17 @@ export async function createPgAdapter(config: PostgresDatabaseConfig): Promise<D
 
   try {
     const importedModule = await import("pg");
-    pgModule = ((importedModule as { default?: typeof importedModule }).default ??
-      importedModule) as typeof pgModule;
+    pgModule = ((importedModule as { default?: typeof importedModule }).default ?? importedModule) as typeof pgModule;
   } catch (error) {
-    throw new Error(
-      "The 'pg' package is required for dialect 'pg'. Install it with `pnpm add pg`.",
-      { cause: error as Error }
-    );
+    throw new Error("The 'pg' package is required for dialect 'pg'. Install it with `pnpm add pg`.", { cause: error as Error });
   }
 
   const connectionOptions = {
-    host: config.host,
+    host: requireResolvedDatabaseString(config.host, "host"),
     port: config.port,
-    database: config.database,
-    user: config.user,
-    password: config.password,
+    database: requireResolvedDatabaseString(config.database, "database"),
+    user: requireResolvedDatabaseString(config.user, "user"),
+    password: config.password === undefined ? undefined : requireResolvedDatabaseString(config.password, "password"),
     ssl: buildPgSsl(config),
     application_name: config.applicationName,
     statement_timeout: config.statementTimeoutMs,
