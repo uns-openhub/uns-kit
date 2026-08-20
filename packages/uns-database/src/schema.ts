@@ -1,22 +1,30 @@
 import { z } from "zod";
 
-import { hostValueSchema, secretValueSchema } from "./placeholders.js";
+import { hostPlaceholderSchema, secretValueSchema } from "./placeholders.js";
 
 // Preserve the Zod 3 contract, where .int() accepted finite integers outside
 // Number's safe-integer range as well.
 const integerSchema = () => z.number().multipleOf(1);
 const positiveInt = integerSchema().positive();
 const sqlDirSchema = z.string().min(1).optional();
+const nonEmptySecretValueSchema = secretValueSchema.refine(
+  (value) => typeof value !== "string" || value.trim().length > 0,
+  "Value must not be empty",
+);
+// Database endpoints are often stored alongside credentials in Infisical. Keep
+// host-specific placeholders (inline/external/system) while allowing the same
+// env/Infisical references accepted for other resolved string values.
+const databaseHostSchema = z.union([hostPlaceholderSchema, secretValueSchema]);
 
 const sslModeSchema = z.union([
   z.boolean(),
   z
     .object({
       rejectUnauthorized: z.boolean().default(true),
-      ca: z.string().optional(),
-      cert: z.string().optional(),
-      key: z.string().optional(),
-      servername: z.string().optional(),
+      ca: secretValueSchema.optional(),
+      cert: secretValueSchema.optional(),
+      key: secretValueSchema.optional(),
+      servername: secretValueSchema.optional(),
     })
     .strict(),
 ]);
@@ -24,10 +32,10 @@ const sslModeSchema = z.union([
 export const postgresDatabaseSchema = z
   .object({
     dialect: z.literal("pg"),
-    host: hostValueSchema,
+    host: databaseHostSchema,
     port: positiveInt.default(5432),
-    database: z.string().min(1),
-    user: z.string().min(1),
+    database: nonEmptySecretValueSchema,
+    user: nonEmptySecretValueSchema,
     password: secretValueSchema.optional(),
     usePool: z.boolean().default(true),
     ssl: sslModeSchema.optional(),
@@ -55,14 +63,14 @@ export const sqliteDatabaseSchema = z
 const oracleDatabaseBaseSchema = z
   .object({
     dialect: z.literal("oracle"),
-    user: z.string().min(1),
+    user: nonEmptySecretValueSchema,
     password: secretValueSchema.optional(),
     usePool: z.boolean().default(true),
-    connectString: z.string().min(1).optional(),
-    host: hostValueSchema.optional(),
+    connectString: nonEmptySecretValueSchema.optional(),
+    host: databaseHostSchema.optional(),
     port: positiveInt.default(1521),
-    serviceName: z.string().min(1).optional(),
-    sid: z.string().min(1).optional(),
+    serviceName: nonEmptySecretValueSchema.optional(),
+    sid: nonEmptySecretValueSchema.optional(),
     sqlDir: sqlDirSchema,
     poolMin: integerSchema().nonnegative().optional(),
     poolMax: positiveInt.optional(),
@@ -96,6 +104,16 @@ export const databasesConfigSchema = z.record(z.string().min(1), databaseConnect
 export const databaseProjectExtrasSchema = z.object({
   databases: databasesConfigSchema,
 });
+
+/**
+ * Database adapters run after ConfigFile.loadConfig() resolves env/Infisical and
+ * host placeholders. Rejecting an unresolved placeholder here avoids sending a
+ * configuration object to a database driver when a caller bypasses that flow.
+ */
+export function requireResolvedDatabaseString(value: unknown, field: string): string {
+  if (typeof value === "string" && value.trim().length > 0) return value;
+  throw new Error(`Database configuration '${field}' must be resolved to a non-empty string before connecting.`);
+}
 
 export type PostgresDatabaseConfig = z.infer<typeof postgresDatabaseSchema>;
 export type SqliteDatabaseConfig = z.infer<typeof sqliteDatabaseSchema>;
