@@ -7,6 +7,12 @@ import { HandoverManagerEventEmitter } from "./handover-manager-event-emitter.js
 import { ACTIVE_TIMEOUT, PACKAGE_INFO } from "./process-config.js";
 import { UnsEvents } from "./uns-interfaces.js";
 
+function normalizeHandoverId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= 128 ? normalized : undefined;
+}
+
 /**
  * HandoverManager is responsible for all handover-related logic,
  * including handling incoming MQTT messages, issuing handover requests,
@@ -22,6 +28,8 @@ export class HandoverManager {
   private handoverInProgress: boolean = false;
   private topicBuilder: MqttTopicBuilder;
   private activeTimeout: NodeJS.Timeout | undefined;
+  private readonly handoverId: string | undefined;
+  private acceptedHandoverId: string | undefined;
   private active: boolean = false;
   public handoverRequestEnabled: boolean = false;
   public handoverEnabled: boolean = true;
@@ -35,6 +43,7 @@ export class HandoverManager {
     handoverRequestEnabled: boolean,
     handoverEnabled: boolean,
     forceStartEnabled: boolean,
+    handoverId?: string,
   ) {
     this.processName = processName;
     this.processId = processId;
@@ -43,6 +52,7 @@ export class HandoverManager {
     this.handoverRequestEnabled = handoverRequestEnabled;
     this.handoverEnabled = handoverEnabled;
     this.forceStartEnabled = forceStartEnabled;
+    this.handoverId = normalizeHandoverId(handoverId);
 
     // Instantiate the topic builder.
     const packageName = PACKAGE_INFO.name;
@@ -64,11 +74,47 @@ export class HandoverManager {
     }, ACTIVE_TIMEOUT);
   }
 
-  private getUserProperties(): Record<string, string> {
-    return {
+  private getUserProperties(handoverId?: string): Record<string, string> {
+    const properties: Record<string, string> = {
       processName: this.processName,
       processId: this.processId,
     };
+    const normalized = normalizeHandoverId(handoverId ?? this.handoverId);
+    if (normalized) properties.handoverId = normalized;
+    return properties;
+  }
+
+  private handoverPayload(
+    type: string,
+    handoverId?: string,
+    fields: Record<string, unknown> = {},
+  ): string {
+    const normalized = normalizeHandoverId(handoverId ?? this.handoverId);
+    return JSON.stringify({
+      type,
+      ...fields,
+      ...(normalized ? { handoverId: normalized } : {}),
+    });
+  }
+
+  private getHandoverId(response: unknown, event: UnsEvents["input"]): string | undefined {
+    const fromPayload = response && typeof response === "object" && !Array.isArray(response)
+      ? (response as { handoverId?: unknown }).handoverId
+      : undefined;
+    if (typeof fromPayload === "string") return normalizeHandoverId(fromPayload);
+    const fromProperties = event.packet?.properties?.userProperties?.handoverId;
+    return typeof fromProperties === "string" ? normalizeHandoverId(fromProperties) : undefined;
+  }
+
+  private acceptsHandoverResponse(receivedHandoverId: string | undefined): boolean {
+    if (!this.handoverId || !receivedHandoverId) {
+      return true;
+    }
+    if (this.handoverId === receivedHandoverId) {
+      return true;
+    }
+    logger.warn(`${this.processName} - Ignoring handover message for another migration.`);
+    return false;
   }
 
   private getSourceProcessId(event: UnsEvents["input"]): string | undefined {
@@ -137,7 +183,7 @@ export class HandoverManager {
           this.event.emit("handoverManager", { active: this.active });
           this.requestingHandover = true;
           const eventHandoverTopic = new MqttTopicBuilder(MqttTopicBuilder.extractBaseTopic(event.topic)).getHandoverTopic();
-          await this.mqttProxy.publish(eventHandoverTopic, JSON.stringify({ type: "handover_intent" }), {
+          await this.mqttProxy.publish(eventHandoverTopic, this.handoverPayload("handover_intent"), {
             retain: false,
             properties: {
               userProperties: this.getUserProperties(),
@@ -147,7 +193,7 @@ export class HandoverManager {
           setTimeout(async () => {
             logger.info(`${this.processName} - Requesting handover ${eventHandoverTopic}.`);
             this.handoverInProgress = true;
-            await this.mqttProxy.publish(eventHandoverTopic, JSON.stringify({ type: "handover_request" }), {
+            await this.mqttProxy.publish(eventHandoverTopic, this.handoverPayload("handover_request"), {
               retain: false,
               properties: {
                 responseTopic: this.topicBuilder.getHandoverTopic(),
@@ -198,6 +244,8 @@ export class HandoverManager {
       // Responder process
       // Check if the message is a handover request and publish MULTIPLE handover_subscriber messages
       if (response.type === "handover_request") {
+        const handoverId = this.getHandoverId(response, event);
+        this.acceptedHandoverId = handoverId;
         logger.info(
           `${this.processName} - Received handover request from ${event.packet?.properties?.userProperties?.processName}. Accepting handover.`,
         );
@@ -217,8 +265,7 @@ export class HandoverManager {
           if (workerData.batchSize > 0) {
             await this.mqttProxy.publish(
               event.packet.properties?.responseTopic ?? "",
-              JSON.stringify({
-                type: "handover_subscriber",
+              this.handoverPayload("handover_subscriber", handoverId, {
                 batchSize: workerData.batchSize,
                 referenceHash: workerData.referenceHash,
                 instanceName: workerData.instanceName,
@@ -227,7 +274,7 @@ export class HandoverManager {
                 retain: false,
                 properties: {
                   responseTopic: this.topicBuilder.getHandoverTopic(),
-                  userProperties: this.getUserProperties(),
+                  userProperties: this.getUserProperties(handoverId),
                 },
               },
             );
@@ -241,14 +288,12 @@ export class HandoverManager {
         this.event.emit("handoverManager", { active: this.active });
         await this.mqttProxy.publish(
           event.packet.properties?.responseTopic ?? "",
-          JSON.stringify({
-            type: "handover_fin",
-          }),
+          this.handoverPayload("handover_fin", handoverId),
           {
             retain: false,
             properties: {
               responseTopic: this.topicBuilder.getHandoverTopic(),
-              userProperties: this.getUserProperties(),
+              userProperties: this.getUserProperties(handoverId),
             },
           },
         );
@@ -264,6 +309,7 @@ export class HandoverManager {
       // Check if the message is one of the handover_subscriber message in response to handover_request
       // and publish a handover_ack message
       if (response.type === "handover_subscriber") {
+        if (!this.acceptsHandoverResponse(this.getHandoverId(response, event))) return;
         // Find correct unsProxy instance for handover_subscriber and set it active
         this.unsMqttProxies.forEach((unsProxy: UnsMqttProxy) => {
           if (unsProxy.instanceName === response.instanceName) {
@@ -275,6 +321,8 @@ export class HandoverManager {
       // Requestor process
       // Check if the message is a handover_fin at the end of handover_subscriber messages
       if (response.type === "handover_fin") {
+        const handoverId = this.getHandoverId(response, event);
+        if (!this.acceptsHandoverResponse(handoverId)) return;
         logger.info(`${this.processName} - Received handover fin from ${event.packet?.properties?.userProperties?.processName}.`);
 
         // Maybe we should count the number of requests that were allrady made TODO
@@ -293,14 +341,12 @@ export class HandoverManager {
         // Maybe we should reply with handover_ack.
         await this.mqttProxy.publish(
           event.packet.properties?.responseTopic ?? "",
-          JSON.stringify({
-            type: "handover_ack",
-          }),
+          this.handoverPayload("handover_ack", handoverId),
           {
             retain: false,
             properties: {
               responseTopic: this.topicBuilder.getHandoverTopic(),
-              userProperties: this.getUserProperties(),
+              userProperties: this.getUserProperties(handoverId),
             },
           },
         );
@@ -310,6 +356,11 @@ export class HandoverManager {
       // Responder process
       // Check if the message is a handover_ack at the end of handover_fin messages
       if (response.type === "handover_ack") {
+        const handoverId = this.getHandoverId(response, event);
+        if (this.acceptedHandoverId && handoverId && this.acceptedHandoverId !== handoverId) {
+          logger.warn(`${this.processName} - Ignoring acknowledgement for another migration.`);
+          return;
+        }
         logger.info(`${this.processName} - Received handover ack from ${event.packet?.properties?.userProperties?.processName}.`);
         this.handoverInProgress = false;
         this.requestingHandover = false;

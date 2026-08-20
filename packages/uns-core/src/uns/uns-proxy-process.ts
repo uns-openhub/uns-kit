@@ -38,6 +38,7 @@ class UnsProxyProcess {
   private processStatusTopic: string;
   private processName: string;
   private processId: string;
+  private handoverId: string | undefined;
   private unsMqttProxies: UnsMqttProxy[];
   private unsApiProxies: unknown[];
   private processMqttProxy: MqttProxy;
@@ -104,6 +105,7 @@ class UnsProxyProcess {
     }
     this.processName = unsProxyProcessParameters.processName;
     this.processId = randomBytes(16).toString("hex");
+    this.handoverId = unsProxyProcessParameters.handoverId ?? process.env["UNS_HANDOVER_ID"];
     const { name: packageName, version } = PACKAGE_INFO;
 
     // Instantiate the topic builder.
@@ -168,7 +170,7 @@ class UnsProxyProcess {
    * Initializes the HandoverManager instance and sets up event listeners for handover and MQTT input events.
    * Determines handover and force start modes based on process arguments.
    */
-  private initHandoverManager(instanceMode: string, handover: boolean) {
+  private initHandoverManager(instanceMode: string, handover: boolean, handoverId?: string) {
     const handoverRequestEnabled = instanceMode == "handover" ? true : false;
     const forceStartEnabled = instanceMode == "force" ? true : false;
 
@@ -180,6 +182,7 @@ class UnsProxyProcess {
       handoverRequestEnabled,
       handover ?? true,
       forceStartEnabled,
+      handoverId,
     );
 
     // Listen for handover events.
@@ -209,7 +212,11 @@ class UnsProxyProcess {
 
     // Currently handover manager can handle only mqtt events
     if (!this.handoverManager) {
-      this.initHandoverManager(instanceMode, handover);
+      this.initHandoverManager(
+        instanceMode,
+        handover,
+        this.handoverId,
+      );
     }
 
     const resolvedUnsParameters: IUnsParameters = {

@@ -9,6 +9,21 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.13 - Optional controller-correlated handovers
+
+`UnsProxyProcess` accepts an optional `handoverId` parameter or
+`UNS_HANDOVER_ID` environment variable. When supplied, it adds that opaque id
+to handover MQTT payloads and MQTT 5 user properties. A new target includes
+the id in its final `handover_ack`, even when its source still runs an older
+uns-kit that does not echo the id.
+
+Existing applications need no configuration or source change: without this
+value their MQTT messages remain byte-for-byte compatible with the legacy
+handover protocol. A controller should inject the value only for a durable,
+operator-initiated migration and must still accept an acknowledgement without
+the id from a legacy target. The value is correlation metadata, not a secret;
+do not use it as an authorization or fencing token.
+
 ## 3.0.12 - Expiring retained handover heartbeats
 
 `UnsProxyProcess` now publishes its `active` heartbeat as an MQTT 5 retained

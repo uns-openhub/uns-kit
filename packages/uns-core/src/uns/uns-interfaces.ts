@@ -145,6 +145,11 @@ export interface IUnsParameters {
 
 export interface IUnsProcessParameters {
   processName: string;
+  /**
+   * Optional controller-supplied correlation id for one cooperative handover.
+   * Older peers ignore it, so it must never be required for normal startup.
+   */
+  handoverId?: string;
   mqttSubToTopics?: string | string[];
   username?: string;
   password?: string;
