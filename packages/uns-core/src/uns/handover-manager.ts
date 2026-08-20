@@ -1,11 +1,11 @@
-import { UnsEvents } from "./uns-interfaces.js";
 import logger from "../logger.js";
-import { HandoverManagerEventEmitter } from "./handover-manager-event-emitter.js";
 import { HandoverManagerEvents } from "../uns-mqtt/mqtt-interfaces.js";
 import MqttProxy from "../uns-mqtt/mqtt-proxy.js";
 import { MqttTopicBuilder } from "../uns-mqtt/mqtt-topic-builder.js";
-import { ACTIVE_TIMEOUT, PACKAGE_INFO } from "./process-config.js";
 import UnsMqttProxy from "../uns-mqtt/uns-mqtt-proxy.js";
+import { HandoverManagerEventEmitter } from "./handover-manager-event-emitter.js";
+import { ACTIVE_TIMEOUT, PACKAGE_INFO } from "./process-config.js";
+import { UnsEvents } from "./uns-interfaces.js";
 
 /**
  * HandoverManager is responsible for all handover-related logic,
@@ -27,7 +27,15 @@ export class HandoverManager {
   public handoverEnabled: boolean = true;
   public forceStartEnabled: boolean = false;
 
-  constructor(processName: string, processId: string, mqttProxy: MqttProxy, unsMqttProxies: UnsMqttProxy[], handoverRequestEnabled: boolean, handoverEnabled: boolean, forceStartEnabled: boolean) {
+  constructor(
+    processName: string,
+    processId: string,
+    mqttProxy: MqttProxy,
+    unsMqttProxies: UnsMqttProxy[],
+    handoverRequestEnabled: boolean,
+    handoverEnabled: boolean,
+    forceStartEnabled: boolean,
+  ) {
     this.processName = processName;
     this.processId = processId;
     this.mqttProxy = mqttProxy;
@@ -39,7 +47,9 @@ export class HandoverManager {
     // Instantiate the topic builder.
     const packageName = PACKAGE_INFO.name;
     const version = PACKAGE_INFO.version;
-    this.topicBuilder = new MqttTopicBuilder(`uns-infra/${MqttTopicBuilder.sanitizeTopicPart(packageName)}/${MqttTopicBuilder.sanitizeTopicPart(version)}/${MqttTopicBuilder.sanitizeTopicPart(this.processName)}/`);
+    this.topicBuilder = new MqttTopicBuilder(
+      `uns-infra/${MqttTopicBuilder.sanitizeTopicPart(packageName)}/${MqttTopicBuilder.sanitizeTopicPart(version)}/${MqttTopicBuilder.sanitizeTopicPart(this.processName)}/`,
+    );
 
     // Set status as active after a timeout if no other active process are detected.
     this.activeTimeout = setTimeout(() => {
@@ -98,12 +108,7 @@ export class HandoverManager {
   public async handleMqttMessage(event: UnsEvents["input"]): Promise<void> {
     try {
       // Check if the packet is active messages from other processes and this process is not active.
-      if (
-        this.isProcessActiveTopic(event.topic) &&
-        this.requestingHandover === false &&
-        this.active === false &&
-        this.handoverInProgress === false
-      ) {
+      if (this.isProcessActiveTopic(event.topic) && this.requestingHandover === false && this.active === false && this.handoverInProgress === false) {
         const sourceProcessId = this.getSourceProcessId(event);
         if (sourceProcessId === this.processId) {
           return;
@@ -114,6 +119,15 @@ export class HandoverManager {
         }
         const sourceInfo = sourceProcessId ? ` (processId=${sourceProcessId})` : "";
         logger.info(`${this.processName} - Another process is active${sourceInfo} on ${event.topic}.`);
+
+        if (event.packet?.retain === true) {
+          // A retained heartbeat can belong to a process that crashed before its
+          // expiry. Wait for a fresh non-retained heartbeat before asking it to
+          // hand over; otherwise a stale retained message would block startup.
+          logger.info(`${this.processName} - Retained active heartbeat observed; waiting for a fresh heartbeat.`);
+          this.activeTimeout?.refresh();
+          return;
+        }
 
         if (this.handoverRequestEnabled && this.handoverEnabled) {
           // Requester process
@@ -154,10 +168,8 @@ export class HandoverManager {
             this.unsMqttProxies.forEach((unsProxy) => {
               unsProxy.setPublisherActive();
               unsProxy.setSubscriberActive();
-            }
-            );
-          }
-          else {
+            });
+          } else {
             logger.info(`${this.processName} - Waiting for the other process on topic ${event.topic} to become passive.`);
             this.activeTimeout?.refresh();
           }

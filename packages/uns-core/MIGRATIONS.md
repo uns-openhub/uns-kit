@@ -9,6 +9,25 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.12 - Expiring retained handover heartbeats
+
+`UnsProxyProcess` now publishes its `active` heartbeat as an MQTT 5 retained
+message with a 30-second expiry, refreshed every 10 seconds. A newly started
+process can therefore see a live predecessor immediately rather than racing a
+single non-retained heartbeat. On normal `UnsProxyProcess.shutdown()`, it
+publishes short-lived `active=0` before disconnecting.
+
+The handover manager treats a retained `active=1` as a possibly stale snapshot
+and waits for a fresh heartbeat before requesting a handover. If the retained
+process has crashed, no fresh heartbeat arrives, so the new process activates
+after its normal active timeout; the stale retained message expires shortly
+afterwards. Keep the `uns.instanceMode: "handover"` and
+`uns.handover: true` settings on both sides of a handover.
+
+Applications that stop an individual process-owned `UnsMqttProxy` rather than
+calling `UnsProxyProcess.shutdown()` still rely on the 30-second expiry. Migrate
+those applications to the process-level shutdown API when practical.
+
 ## 3.0.11 - OpenHub runtime profiles and add-on compatibility
 
 Apply this migration when upgrading from `@uns-kit/cli` or `@uns-kit/core`

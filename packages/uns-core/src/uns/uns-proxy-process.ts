@@ -1,23 +1,18 @@
-import logger from "../logger.js";
 import { randomBytes } from "crypto";
-import { IUnsMessage, IUnsParameters, IUnsProcessParameters, UnsEvents } from "./uns-interfaces.js";
+
+import logger from "../logger.js";
 import { IMqttParameters } from "../uns-mqtt/mqtt-interfaces.js";
 import MqttProxy from "../uns-mqtt/mqtt-proxy.js";
-import UnsMqttProxy from "../uns-mqtt/uns-mqtt-proxy.js";
-import { HandoverManager } from "./handover-manager.js";
-
-// Import configuration and initialization modules.
-import { PACKAGE_INFO, MQTT_UPDATE_INTERVAL } from "./process-config.js";
 import { MqttTopicBuilder } from "../uns-mqtt/mqtt-topic-builder.js";
-import { StatusMonitor } from "./status-monitor.js";
-import { UnsPacket } from "./uns-packet.js";
+import UnsMqttProxy from "../uns-mqtt/uns-mqtt-proxy.js";
 import type { UnsMqttProxyStopOptions } from "../uns-mqtt/uns-mqtt-proxy.js";
-import {
-  buildUnsServiceMetadata,
-  type UnsServiceMetadata,
-  type UnsServiceMetadataInput,
-} from "./service-metadata.js";
-
+import { HandoverManager } from "./handover-manager.js";
+// Import configuration and initialization modules.
+import { MQTT_UPDATE_INTERVAL, PACKAGE_INFO } from "./process-config.js";
+import { type UnsServiceMetadata, type UnsServiceMetadataInput, buildUnsServiceMetadata } from "./service-metadata.js";
+import { StatusMonitor } from "./status-monitor.js";
+import { IUnsMessage, IUnsParameters, IUnsProcessParameters, UnsEvents } from "./uns-interfaces.js";
+import { UnsPacket } from "./uns-packet.js";
 
 /**
  * UnsProxyProcess is responsible for managing the process lifecycle,
@@ -112,7 +107,9 @@ class UnsProxyProcess {
     const { name: packageName, version } = PACKAGE_INFO;
 
     // Instantiate the topic builder.
-    const topicBuilder = new MqttTopicBuilder(`uns-infra/${MqttTopicBuilder.sanitizeTopicPart(packageName)}/${MqttTopicBuilder.sanitizeTopicPart(version)}/${MqttTopicBuilder.sanitizeTopicPart(this.processName)}/`);
+    const topicBuilder = new MqttTopicBuilder(
+      `uns-infra/${MqttTopicBuilder.sanitizeTopicPart(packageName)}/${MqttTopicBuilder.sanitizeTopicPart(version)}/${MqttTopicBuilder.sanitizeTopicPart(this.processName)}/`,
+    );
 
     // Generate topics.
     const processStatusTopic = topicBuilder.getProcessStatusTopic();
@@ -124,10 +121,7 @@ class UnsProxyProcess {
     this.serviceMetadataTopic = serviceMetadataTopic;
 
     // Configure MQTT topics for subscription.
-    const mqttSubToTopics = unsProxyProcessParameters?.mqttSubToTopics ?? [
-      wildcardActiveTopic,
-      handoverTopic,
-    ];
+    const mqttSubToTopics = unsProxyProcessParameters?.mqttSubToTopics ?? [wildcardActiveTopic, handoverTopic];
     const mqttParameters: IMqttParameters = {
       mqttSubToTopics,
       username: unsProxyProcessParameters?.username ?? "",
@@ -175,7 +169,6 @@ class UnsProxyProcess {
    * Determines handover and force start modes based on process arguments.
    */
   private initHandoverManager(instanceMode: string, handover: boolean) {
-
     const handoverRequestEnabled = instanceMode == "handover" ? true : false;
     const forceStartEnabled = instanceMode == "force" ? true : false;
 
@@ -186,7 +179,7 @@ class UnsProxyProcess {
       this.unsMqttProxies,
       handoverRequestEnabled,
       handover ?? true,
-      forceStartEnabled
+      forceStartEnabled,
     );
 
     // Listen for handover events.
@@ -205,11 +198,12 @@ class UnsProxyProcess {
    * Creates a new UNS proxy instance and stores it for future management.
    */
   public async createUnsMqttProxy(
-      mqttHost: string, 
-      instanceName: string,
-      instanceMode: string,
-      handover: boolean,
-      unsParameters?: IUnsParameters): Promise<UnsMqttProxy> {
+    mqttHost: string,
+    instanceName: string,
+    instanceMode: string,
+    handover: boolean,
+    unsParameters?: IUnsParameters,
+  ): Promise<UnsMqttProxy> {
     // Wait until the MQTT connection is established before proceeding.
     await this.waitForProcessConnection();
 
@@ -223,13 +217,10 @@ class UnsProxyProcess {
       clientId: unsParameters?.clientId ?? `${this.processName}-${instanceName}-${this.processId}`,
     };
     const unsMqttProxy = new UnsMqttProxy(mqttHost, this.processName, instanceName, resolvedUnsParameters);
-    
+
     // Listen for UNS proxy producing topics and publish them via MQTT.
     unsMqttProxy.event.on("unsProxyProducedTopics", (event) => {
-      this.processMqttProxy.publish(
-        event.statusTopic,
-        JSON.stringify(event.producedTopics),
-      );
+      this.processMqttProxy.publish(event.statusTopic, JSON.stringify(event.producedTopics));
     });
 
     // Listen for UNS proxy status events and publish them via MQTT.
@@ -237,10 +228,7 @@ class UnsProxyProcess {
       const time = UnsPacket.formatToISO8601(new Date());
       const unsMessage: IUnsMessage = { data: { time, value: event.value, uom: event.uom } };
       UnsPacket.unsPacketFromUnsMessage(unsMessage).then((packet) => {
-        this.processMqttProxy.publish(
-          event.statusTopic,
-          JSON.stringify(packet),
-        );
+        this.processMqttProxy.publish(event.statusTopic, JSON.stringify(packet));
       });
     });
 
@@ -268,11 +256,7 @@ class UnsProxyProcess {
       processId: this.processId,
       metadata,
     });
-    await this.processMqttProxy.publish(
-      this.serviceMetadataTopic,
-      JSON.stringify(resolved),
-      { retain: true },
-    );
+    await this.processMqttProxy.publish(this.serviceMetadataTopic, JSON.stringify(resolved), { retain: true });
     return resolved;
   }
 
@@ -295,12 +279,13 @@ class UnsProxyProcess {
 
     try {
       this.statusMonitor.stop();
+      await this.statusMonitor.publishInactiveStatus();
     } catch (e: any) {
       const reason = e instanceof Error ? e : new Error(String(e));
-      logger.error(`${this.processName} - Error stopping StatusMonitor: ${reason.message}`);
+      logger.error(`${this.processName} - Error stopping StatusMonitor or publishing passive state: ${reason.message}`);
       shutdownErrors.push(reason);
     }
-    
+
     if (this.mqttInputHandler) {
       try {
         this.processMqttProxy.event.off("input", this.mqttInputHandler);
@@ -310,10 +295,8 @@ class UnsProxyProcess {
         shutdownErrors.push(reason);
       }
     }
-    
-    const proxyStopResults = await Promise.allSettled(
-      this.unsMqttProxies.map((proxy) => proxy.stop(options)),
-    );
+
+    const proxyStopResults = await Promise.allSettled(this.unsMqttProxies.map((proxy) => proxy.stop(options)));
     for (const result of proxyStopResults) {
       if (result.status === "rejected") {
         const reason = result.reason instanceof Error ? result.reason : new Error(String(result.reason));
@@ -338,7 +321,6 @@ class UnsProxyProcess {
 
     logger.info(`${this.processName} - Shutdown complete.`);
   }
-  
 }
 
 interface UnsProxyProcess {}

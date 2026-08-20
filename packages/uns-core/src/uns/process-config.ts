@@ -1,6 +1,7 @@
 // process-config.ts
-import * as path from "path";
 import { readFileSync } from "fs";
+import * as path from "path";
+
 import { basePath } from "../base-path.js";
 
 // Path to package.json to retrieve package name and version
@@ -16,9 +17,17 @@ const rawPackageInfo: PackageInfo = JSON.parse(readFileSync(PACKAGE_JSON_PATH, "
 
 export const PACKAGE_INFO: PackageInfo = {
   ...rawPackageInfo,
-  name: rawPackageInfo.name
+  name: rawPackageInfo.name,
 };
 
 // Other configuration values (update intervals, timeouts, etc.)
 export const MQTT_UPDATE_INTERVAL = 10000; // in milliseconds
-export const ACTIVE_TIMEOUT = 10000; // in milliseconds
+/**
+ * A fresh active heartbeat is published every 10 seconds. Leave enough time
+ * for a just-subscribed process to receive a complete heartbeat interval.
+ */
+export const ACTIVE_TIMEOUT = 25000; // in milliseconds
+/** Retained active heartbeats expire automatically when a process disappears. */
+export const ACTIVE_STATUS_EXPIRY_SECONDS = 30;
+/** A normal shutdown should briefly advertise passive state, then clear it. */
+export const INACTIVE_STATUS_EXPIRY_SECONDS = 1;
