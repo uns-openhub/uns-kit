@@ -80,6 +80,18 @@ class UnsProxy:
             topic_object.setdefault("timestamp", isoformat(datetime.now(timezone.utc)))
             self._produced_topics[full_topic] = topic_object
             await self._emit_produced_topics()
+            return
+
+        existing = self._produced_topics[full_topic]
+        identity_keys = ("assetStableEntityId", "assetDisplayName", "assetIdentityProof")
+        identity_changed = any(existing.get(key) != topic_object.get(key) for key in identity_keys)
+        for key in identity_keys:
+            if key in topic_object:
+                existing[key] = topic_object[key]
+            else:
+                existing.pop(key, None)
+        if identity_changed:
+            await self._emit_produced_topics()
 
     async def _emit_produced_api_endpoints(self) -> None:
         await self.event.emit(

@@ -136,4 +136,72 @@ describe("UNS produced topic metadata", () => {
       objectId: "slab-001",
     });
   });
+
+  it("publishes stable Asset metadata only as an atomic proof-bound set and refreshes rotated proof", () => {
+    const proxy = new TestUnsProxy();
+    const events: UnsEvents["unsProxyProducedTopics"][] = [];
+    proxy.event.on("unsProxyProducedTopics", value => events.push(value));
+    const baseTopic = {
+      timestamp: "2026-09-02T12:00:00.000Z",
+      topic: "enterprise/site-a/line-4/",
+      asset: "PACKER-07",
+      objectType: "equipment",
+      objectId: "main",
+      attribute: "state",
+      attributeType: UnsAttributeType.Data,
+      description: "Packer state",
+      tags: null,
+      attributeNeedsPersistence: true,
+      dataGroup: "",
+    } as const;
+
+    proxy.register({
+      ...baseTopic,
+      assetStableEntityId: "11111111-1111-4111-8111-111111111111",
+      assetDisplayName: "Packer 07",
+      assetIdentityProof: "proof-1",
+    });
+    proxy.register({
+      ...baseTopic,
+      timestamp: "2026-09-02T12:01:00.000Z",
+      assetStableEntityId: "11111111-1111-4111-8111-111111111111",
+      assetDisplayName: "Packer 07",
+      assetIdentityProof: "proof-2",
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events[1]?.producedTopics[0]).toMatchObject({
+      assetStableEntityId: "11111111-1111-4111-8111-111111111111",
+      assetDisplayName: "Packer 07",
+      assetIdentityProof: "proof-2",
+    });
+  });
+
+  it("removes a prior identity claim when later publications omit it", () => {
+    const proxy = new TestUnsProxy();
+    let event: UnsEvents["unsProxyProducedTopics"] | null = null;
+    proxy.event.on("unsProxyProducedTopics", value => { event = value; });
+    const baseTopic = {
+      timestamp: "2026-09-02T12:00:00.000Z",
+      topic: "enterprise/site-a/line-4/",
+      asset: "PACKER-07",
+      objectType: "equipment",
+      objectId: "main",
+      attribute: "state",
+      attributeType: UnsAttributeType.Data,
+      description: "Packer state",
+      tags: null,
+      attributeNeedsPersistence: true,
+      dataGroup: "",
+    } as const;
+    proxy.register({
+      ...baseTopic,
+      assetStableEntityId: "11111111-1111-4111-8111-111111111111",
+      assetIdentityProof: "proof-1",
+    });
+    proxy.register({ ...baseTopic, timestamp: "2026-09-02T12:02:00.000Z" });
+
+    expect(event?.producedTopics[0]).not.toHaveProperty("assetStableEntityId");
+    expect(event?.producedTopics[0]).not.toHaveProperty("assetIdentityProof");
+  });
 });

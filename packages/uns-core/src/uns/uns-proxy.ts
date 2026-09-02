@@ -189,6 +189,11 @@ export default class UnsProxy {
           ...(topicObject.virtualGroup ? { virtualGroup: topicObject.virtualGroup } : {}),
           asset: topicObject.asset,
           assetDescription: topicObject.assetDescription,
+          ...(topicObject.assetStableEntityId && topicObject.assetIdentityProof ? {
+            assetStableEntityId: topicObject.assetStableEntityId,
+            ...(topicObject.assetDisplayName ? { assetDisplayName: topicObject.assetDisplayName } : {}),
+            assetIdentityProof: topicObject.assetIdentityProof,
+          } : {}),
           objectType: topicObject.objectType,
           objectTypeDescription: topicObject.objectTypeDescription,
           objectId: topicObject.objectId,
@@ -201,7 +206,22 @@ export default class UnsProxy {
       } else {
         // Already registered — refresh only the timestamp so the periodic
         // heartbeat reflects actual data flow rather than frozen startup time.
-        this.producedTopics.get(fullTopic)!.timestamp = topicObject.timestamp;
+        const existing = this.producedTopics.get(fullTopic)!;
+        existing.timestamp = topicObject.timestamp;
+        const identityChanged = existing.assetStableEntityId !== topicObject.assetStableEntityId
+          || existing.assetDisplayName !== topicObject.assetDisplayName
+          || existing.assetIdentityProof !== topicObject.assetIdentityProof;
+        if (topicObject.assetStableEntityId && topicObject.assetIdentityProof) {
+          existing.assetStableEntityId = topicObject.assetStableEntityId;
+          existing.assetIdentityProof = topicObject.assetIdentityProof;
+          if (topicObject.assetDisplayName) existing.assetDisplayName = topicObject.assetDisplayName;
+          else delete existing.assetDisplayName;
+        } else {
+          delete existing.assetStableEntityId;
+          delete existing.assetDisplayName;
+          delete existing.assetIdentityProof;
+        }
+        if (identityChanged) this.emitProducedTopics();
       }
     }
   }

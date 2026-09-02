@@ -326,7 +326,22 @@ type AttributePayload =
 
 export type IMqttAttributeEntry = IMqttAttributeMessage & AttributePayload;
 
-export interface IMqttPublishRequest {
+export type IAssetIdentityPublicationMetadata =
+  | {
+      assetStableEntityId?: never;
+      assetDisplayName?: never;
+      assetIdentityProof?: never;
+    }
+  | {
+      /** Controller-issued stable Asset UUID. It identifies the Asset, not its current path. */
+      assetStableEntityId: string;
+      /** Optional operator-facing name; never used as an identity key. */
+      assetDisplayName?: string;
+      /** Short-lived controller-signed proof bound to this Asset UUID and exact candidate path. */
+      assetIdentityProof: string;
+    };
+
+export type IMqttPublishRequest = {
   topic: UnsTopics;
   asset: UnsAsset;
   assetDescription?: string;
@@ -336,7 +351,7 @@ export interface IMqttPublishRequest {
   /** Optional controller/UI grouping hint for ObjectId nodes; does not affect storage/table naming. */
   virtualGroup?: string;
   attributes: IMqttAttributeEntry | IMqttAttributeEntry[];
-}
+} & IAssetIdentityPublicationMetadata;
 
 // This interface represents a packet for a UNS system
 export interface IUnsPacket {
@@ -418,6 +433,12 @@ export interface ITopicObject {
   lifecycle?: IUnsLifecycleMetadata;
   asset: UnsAsset;
   assetDescription?: string;
+  /** Optional stable Asset UUID; accepted by the controller only with a valid publication proof. */
+  assetStableEntityId?: string;
+  /** Optional operator-facing name; never used as an identity key. */
+  assetDisplayName?: string;
+  /** Short-lived controller-signed evidence for this exact Asset path. */
+  assetIdentityProof?: string;
   objectType: UnsObjectType;
   objectTypeDescription?: string;
   objectId: UnsObjectId;

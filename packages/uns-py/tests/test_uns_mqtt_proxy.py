@@ -48,6 +48,57 @@ async def test_publish_mqtt_message_defaults_persistence_to_true(
 
 
 @pytest.mark.asyncio
+async def test_publish_mqtt_message_carries_and_rotates_asset_identity_proof() -> None:
+    proxy = UnsMqttProxy(
+        "localhost",
+        process_name="test-process",
+        instance_name="test-instance",
+    )
+
+    async def fake_publish_raw(topic: str, payload: str | bytes, *, qos: int = 0, retain: bool = False) -> None:
+        return None
+
+    proxy.client.publish_raw = fake_publish_raw  # type: ignore[method-assign]
+    request = {
+        "topic": "enterprise/site-a/line-4",
+        "asset": "PACKER-07",
+        "assetStableEntityId": "11111111-1111-4111-8111-111111111111",
+        "assetDisplayName": "Packer 07",
+        "assetIdentityProof": "proof-1",
+        "attributes": {"attribute": "state", "data": {"value": "READY"}},
+    }
+
+    await proxy.publish_mqtt_message(request)
+    request["assetIdentityProof"] = "proof-2"
+    await proxy.publish_mqtt_message(request)
+
+    produced_topic = next(iter(proxy._produced_topics.values()))
+    assert produced_topic["assetStableEntityId"] == "11111111-1111-4111-8111-111111111111"
+    assert produced_topic["assetDisplayName"] == "Packer 07"
+    assert produced_topic["assetIdentityProof"] == "proof-2"
+    await proxy._stop_publish_workers()
+
+
+@pytest.mark.asyncio
+async def test_publish_mqtt_message_rejects_partial_asset_identity_metadata() -> None:
+    proxy = UnsMqttProxy(
+        "localhost",
+        process_name="test-process",
+        instance_name="test-instance",
+    )
+    with pytest.raises(ValueError, match="requires assetStableEntityId and assetIdentityProof"):
+        await proxy.publish_mqtt_message(
+            {
+                "topic": "enterprise/site-a/line-4",
+                "asset": "PACKER-07",
+                "assetDisplayName": "Packer 07",
+                "attributes": {"attribute": "state", "data": {"value": "READY"}},
+            }
+        )
+    await proxy._stop_publish_workers()
+
+
+@pytest.mark.asyncio
 async def test_publish_message_uses_bounded_concurrency() -> None:
     proxy = UnsMqttProxy(
         "localhost",

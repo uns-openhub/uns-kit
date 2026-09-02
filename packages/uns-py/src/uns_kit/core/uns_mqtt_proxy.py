@@ -148,6 +148,28 @@ class UnsMqttProxy(UnsProxy):
         base_topic = mqtt_message.get("topic", "")
         asset = mqtt_message.get("asset")
         asset_description = mqtt_message.get("assetDescription")
+        asset_stable_entity_id = mqtt_message.get("assetStableEntityId")
+        asset_display_name = mqtt_message.get("assetDisplayName")
+        asset_identity_proof = mqtt_message.get("assetIdentityProof")
+        has_asset_identity_metadata = any(
+            value is not None
+            for value in (asset_stable_entity_id, asset_display_name, asset_identity_proof)
+        )
+        if has_asset_identity_metadata:
+            if (
+                not isinstance(asset_stable_entity_id, str)
+                or not asset_stable_entity_id.strip()
+                or not isinstance(asset_identity_proof, str)
+                or not asset_identity_proof.strip()
+                or (
+                    asset_display_name is not None
+                    and (not isinstance(asset_display_name, str) or not asset_display_name.strip())
+                )
+            ):
+                raise ValueError(
+                    "Asset identity metadata requires assetStableEntityId and assetIdentityProof; "
+                    "assetDisplayName must be non-empty when supplied."
+                )
         object_type = mqtt_message.get("objectType")
         object_type_description = mqtt_message.get("objectTypeDescription")
         object_id = mqtt_message.get("objectId")
@@ -193,6 +215,19 @@ class UnsMqttProxy(UnsProxy):
                 "topic": base_topic,
                 "asset": asset,
                 "assetDescription": asset_description,
+                **(
+                    {
+                        "assetStableEntityId": asset_stable_entity_id.strip().lower(),
+                        **(
+                            {"assetDisplayName": asset_display_name.strip()}
+                            if asset_display_name is not None
+                            else {}
+                        ),
+                        "assetIdentityProof": asset_identity_proof.strip(),
+                    }
+                    if has_asset_identity_metadata
+                    else {}
+                ),
                 "objectType": object_type,
                 "objectTypeDescription": object_type_description,
                 "objectId": object_id,
@@ -348,6 +383,19 @@ class UnsMqttProxy(UnsProxy):
                 "topic": base_topic,
                 "asset": msg.get("asset"),
                 "assetDescription": msg.get("assetDescription"),
+                **(
+                    {
+                        "assetStableEntityId": msg["assetStableEntityId"],
+                        **(
+                            {"assetDisplayName": msg["assetDisplayName"]}
+                            if msg.get("assetDisplayName") is not None
+                            else {}
+                        ),
+                        "assetIdentityProof": msg["assetIdentityProof"],
+                    }
+                    if msg.get("assetStableEntityId") is not None
+                    else {}
+                ),
                 "objectType": msg.get("objectType"),
                 "objectTypeDescription": msg.get("objectTypeDescription"),
                 "objectId": msg.get("objectId"),

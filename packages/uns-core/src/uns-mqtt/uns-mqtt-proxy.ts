@@ -51,6 +51,9 @@ type InternalMqttMessage = {
   attribute: UnsAttribute;
   asset: UnsAsset;
   assetDescription?: string;
+  assetStableEntityId?: string;
+  assetDisplayName?: string;
+  assetIdentityProof?: string;
   objectType: UnsObjectType;
   objectTypeDescription?: string;
   objectId: UnsObjectId;
@@ -403,7 +406,33 @@ export default class UnsMqttProxy extends UnsProxy {
     const attrs = Array.isArray(mqttMessage.attributes)
       ? mqttMessage.attributes
       : [mqttMessage.attributes];
-    const { topic, asset, assetDescription, objectType, objectTypeDescription, objectId, virtualGroup: requestVirtualGroup } = mqttMessage;
+    const {
+      topic,
+      asset,
+      assetDescription,
+      assetStableEntityId,
+      assetDisplayName,
+      assetIdentityProof,
+      objectType,
+      objectTypeDescription,
+      objectId,
+      virtualGroup: requestVirtualGroup,
+    } = mqttMessage;
+    const hasAssetIdentityMetadata = assetStableEntityId !== undefined
+      || assetDisplayName !== undefined
+      || assetIdentityProof !== undefined;
+    if (hasAssetIdentityMetadata) {
+      if (
+        typeof assetStableEntityId !== "string"
+        || !assetStableEntityId.trim()
+        || typeof assetIdentityProof !== "string"
+        || !assetIdentityProof.trim()
+        || (assetDisplayName !== undefined
+          && (typeof assetDisplayName !== "string" || !assetDisplayName.trim()))
+      ) {
+        throw new Error("Asset identity metadata requires assetStableEntityId and assetIdentityProof; assetDisplayName must be non-empty when supplied.");
+      }
+    }
     for (const attrEntry of attrs) {
       const attrDescription = attrEntry.description ?? getAttributeDescription(attrEntry.attribute);
       const message: IUnsMessage =
@@ -419,6 +448,11 @@ export default class UnsMqttProxy extends UnsProxy {
         topic,
         asset,
         assetDescription,
+        ...(hasAssetIdentityMetadata ? {
+          assetStableEntityId: assetStableEntityId!.trim().toLowerCase(),
+          ...(assetDisplayName ? { assetDisplayName: assetDisplayName.trim() } : {}),
+          assetIdentityProof: assetIdentityProof!.trim(),
+        } : {}),
         objectType,
         objectTypeDescription,
         objectId,
@@ -587,6 +621,9 @@ export default class UnsMqttProxy extends UnsProxy {
         virtualGroup: msg.virtualGroup,
         asset,
         assetDescription: msg.assetDescription,
+        assetStableEntityId: msg.assetStableEntityId,
+        assetDisplayName: msg.assetDisplayName,
+        assetIdentityProof: msg.assetIdentityProof,
         objectType,
         objectTypeDescription,
         objectId,
