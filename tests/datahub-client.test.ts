@@ -174,4 +174,76 @@ describe("UnsClient datahub endpoints", () => {
     expect(response?.results[0].data?.[0][1]).toBe(42);
     expect(response?.byTopic["plant/line/asset/type/id/current"].stats?.table).toBe("uns_line_data");
   });
+
+  it("resolves a reviewed provider identity into publish-ready Asset metadata", async () => {
+    let receivedPath = "";
+    let receivedAuth = "";
+    let receivedBody: Record<string, unknown> = {};
+    const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      receivedPath = req.url || "";
+      receivedAuth = req.headers.authorization || "";
+      receivedBody = await readJsonBody(req);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        data: {
+          IssueAssetIdentityPublicationProofByExternalIdentity: {
+            proof: "signed-proof",
+            stableEntityId: "11111111-1111-4111-8111-111111111111",
+            candidateAssetPath: "enterprise/new/RESS-14",
+            expiresAt: "2026-09-08T21:30:00.000Z",
+          },
+        },
+      }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    servers.push(server);
+
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const client = new UnsClient(`http://127.0.0.1:${port}/api`, { token: "workload-token" });
+
+    const metadata = await client.issueAssetIdentityPublicationProofByExternalIdentity({
+      providerId: "sap.connector",
+      externalSystem: "sap.s4hana",
+      externalType: "equipment.number",
+      externalId: "RESS-14",
+    }, "enterprise/new/RESS-14");
+
+    expect(receivedPath).toBe("/graphql");
+    expect(receivedAuth).toBe("Bearer workload-token");
+    expect(receivedBody.variables).toEqual({
+      input: {
+        providerId: "sap.connector",
+        externalSystem: "sap.s4hana",
+        externalType: "equipment.number",
+        externalId: "RESS-14",
+        candidateAssetPath: "enterprise/new/RESS-14",
+      },
+    });
+    expect(metadata).toEqual({
+      assetStableEntityId: "11111111-1111-4111-8111-111111111111",
+      assetIdentityProof: "signed-proof",
+      candidateAssetPath: "enterprise/new/RESS-14",
+      expiresAt: "2026-09-08T21:30:00.000Z",
+    });
+  });
+
+  it("surfaces GraphQL proof errors without returning partial identity metadata", async () => {
+    const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      await readJsonBody(req);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ errors: [{ message: "The reviewed provider identity is unavailable or inactive." }] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    servers.push(server);
+
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const client = new UnsClient(`http://127.0.0.1:${port}`, { token: "workload-token" });
+
+    await expect(client.issueAssetIdentityPublicationProof(
+      "11111111-1111-4111-8111-111111111111",
+      "enterprise/new/RESS-14",
+    )).rejects.toThrow("reviewed provider identity is unavailable or inactive");
+  });
 });

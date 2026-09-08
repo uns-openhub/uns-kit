@@ -57,6 +57,21 @@ export type BatchRangeResponsePayload<Row extends unknown[] = unknown[]> = {
   stats?: Record<string, unknown> | null;
 };
 
+export type ProviderAssetIdentity = {
+  providerId: string;
+  externalSystem: string;
+  externalType: string;
+  externalId: string;
+};
+
+/** Metadata that can be spread directly into an Asset-level UNS publish object. */
+export type AssetIdentityPublicationMetadata = {
+  assetStableEntityId: string;
+  assetIdentityProof: string;
+  candidateAssetPath: string;
+  expiresAt: string;
+};
+
 export class RangeResult<Row extends unknown[] = unknown[]> {
   readonly data: Row[];
   readonly stats?: RangeStats | null;
@@ -223,6 +238,8 @@ export class ClientError extends Error {
 
 export type UnsClientOptions = {
   apiBasePath?: string;
+  /** Full controller GraphQL URL when it is not `${baseUrl}/graphql`. */
+  graphqlUrl?: string;
   token?: string;
   timeoutMs?: number;
   /** Preferred non-interactive service credential source. */
@@ -239,6 +256,7 @@ export class UnsClient {
   private readonly apiBasePath: string;
   private readonly baseUrl: string;
   private readonly apiUrl: string;
+  private readonly graphqlUrl: string;
   private readonly timeoutMs: number;
   private readonly tokenProvider?: AccessTokenProvider;
   private readonly authClient?: AuthClient;
@@ -255,6 +273,7 @@ export class UnsClient {
       this.apiUrl = `${strippedBase}${apiBasePath}`;
     }
     this.apiBasePath = apiBasePath;
+    this.graphqlUrl = options.graphqlUrl?.replace(/\/$/, "") || `${this.baseUrl}/graphql`;
     this.timeoutMs = options.timeoutMs ?? 10_000;
     this.tokenProvider = options.tokenProvider;
     this.authClient = options.authClient;
@@ -374,6 +393,97 @@ export class UnsClient {
       }
       throw error;
     }
+  }
+
+  async issueAssetIdentityPublicationProof(
+    stableEntityId: string,
+    candidateAssetPath: string,
+    options: { token?: string } = {},
+  ): Promise<AssetIdentityPublicationMetadata> {
+    return this.requestAssetIdentityPublicationProof(
+      `mutation IssueAssetIdentityPublicationProof($stableEntityId: ID!, $candidateAssetPath: String!) {
+        IssueAssetIdentityPublicationProof(
+          stableEntityId: $stableEntityId
+          candidateAssetPath: $candidateAssetPath
+        ) {
+          proof
+          stableEntityId
+          candidateAssetPath
+          expiresAt
+        }
+      }`,
+      { stableEntityId, candidateAssetPath },
+      "IssueAssetIdentityPublicationProof",
+      options.token,
+    );
+  }
+
+  async issueAssetIdentityPublicationProofByExternalIdentity(
+    identity: ProviderAssetIdentity,
+    candidateAssetPath: string,
+    options: { token?: string } = {},
+  ): Promise<AssetIdentityPublicationMetadata> {
+    return this.requestAssetIdentityPublicationProof(
+      `mutation IssueAssetIdentityPublicationProofByExternalIdentity(
+        $input: ProviderAssetIdentityPublicationProofInput!
+      ) {
+        IssueAssetIdentityPublicationProofByExternalIdentity(input: $input) {
+          proof
+          stableEntityId
+          candidateAssetPath
+          expiresAt
+        }
+      }`,
+      { input: { ...identity, candidateAssetPath } },
+      "IssueAssetIdentityPublicationProofByExternalIdentity",
+      options.token,
+    );
+  }
+
+  private async requestAssetIdentityPublicationProof(
+    query: string,
+    variables: Record<string, unknown>,
+    fieldName: string,
+    explicitToken?: string,
+  ): Promise<AssetIdentityPublicationMetadata> {
+    const token = explicitToken ?? (await this.ensureToken());
+    const payload = await this.requestJson("POST", this.graphqlUrl, { query, variables }, token);
+    const errors = Array.isArray(payload.errors) ? payload.errors : [];
+    if (errors.length > 0) {
+      const message = errors
+        .map((error) => this.graphqlErrorMessage(error))
+        .filter(Boolean)
+        .join("; ");
+      throw new ClientError(`Asset identity proof request failed: ${message || "GraphQL returned an error."}`);
+    }
+    const data = this.objectValue(payload.data);
+    const proof = this.objectValue(data?.[fieldName]);
+    const assetStableEntityId = this.requiredResponseString(proof?.stableEntityId, "stableEntityId").toLowerCase();
+    return {
+      assetStableEntityId,
+      assetIdentityProof: this.requiredResponseString(proof?.proof, "proof"),
+      candidateAssetPath: this.requiredResponseString(proof?.candidateAssetPath, "candidateAssetPath"),
+      expiresAt: this.requiredResponseString(proof?.expiresAt, "expiresAt"),
+    };
+  }
+
+  private graphqlErrorMessage(value: unknown): string {
+    const error = this.objectValue(value);
+    return typeof error?.message === "string" ? error.message.trim() : "";
+  }
+
+  private objectValue(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+  }
+
+  private requiredResponseString(value: unknown, field: string): string {
+    const normalized = typeof value === "string" ? value.trim() : "";
+    if (!normalized) {
+      throw new ClientError(`Asset identity proof response did not include ${field}.`);
+    }
+    return normalized;
   }
 
   private async requestJson(
