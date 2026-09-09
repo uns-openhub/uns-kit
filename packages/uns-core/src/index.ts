@@ -35,6 +35,8 @@ export type {
   BatchRangeResponsePayload,
   ProviderAssetIdentity,
   AssetIdentityPublicationMetadata,
+  AssetProviderIdentityPublicationMetadata,
+  AssetIdentityPublicationEvidenceMetadata,
 } from "./tools/datahub/datahub-client.js";
 export { registerService } from "./tools/datahub/runtime-service-registration.js";
 export type {

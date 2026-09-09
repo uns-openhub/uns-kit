@@ -246,4 +246,83 @@ describe("UnsClient datahub endpoints", () => {
       "enterprise/new/RESS-14",
     )).rejects.toThrow("reviewed provider identity is unavailable or inactive");
   });
+
+  it("returns publish-ready provider candidate evidence without manufacturing a stable ID", async () => {
+    const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      await readJsonBody(req);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: {
+        IssueAssetIdentityPublicationEvidenceByExternalIdentity: {
+          mode: "provider-candidate",
+          proof: "signed-provider-proof",
+          stableEntityId: null,
+          providerId: "sap.connector",
+          externalSystem: "sap.s4hana",
+          externalType: "equipment.number",
+          externalId: "RESS-14",
+          candidateAssetPath: "enterprise/new/RESS-14",
+          expiresAt: "2026-09-09T08:05:00.000Z",
+        },
+      } }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    servers.push(server);
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const client = new UnsClient(`http://127.0.0.1:${port}`, { token: "workload-token" });
+
+    await expect(client.issueAssetIdentityPublicationEvidenceByExternalIdentity({
+      providerId: "sap.connector",
+      externalSystem: "sap.s4hana",
+      externalType: "equipment.number",
+      externalId: "RESS-14",
+    }, "enterprise/new/RESS-14")).resolves.toEqual({
+      assetProviderIdentity: {
+        providerId: "sap.connector",
+        externalSystem: "sap.s4hana",
+        externalType: "equipment.number",
+        externalId: "RESS-14",
+      },
+      assetProviderIdentityProof: "signed-provider-proof",
+      candidateAssetPath: "enterprise/new/RESS-14",
+      expiresAt: "2026-09-09T08:05:00.000Z",
+    });
+  });
+
+  it("keeps the same evidence helper stable when a provider ID is already mapped", async () => {
+    const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
+      await readJsonBody(req);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: {
+        IssueAssetIdentityPublicationEvidenceByExternalIdentity: {
+          mode: "stable",
+          proof: "signed-stable-proof",
+          stableEntityId: "11111111-1111-4111-8111-111111111111",
+          providerId: "sap.connector",
+          externalSystem: "sap.s4hana",
+          externalType: "equipment.number",
+          externalId: "RESS-14",
+          candidateAssetPath: "enterprise/new/RESS-14",
+          expiresAt: "2026-09-09T08:05:00.000Z",
+        },
+      } }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+    servers.push(server);
+    const address = server.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    const client = new UnsClient(`http://127.0.0.1:${port}`, { token: "workload-token" });
+
+    await expect(client.issueAssetIdentityPublicationEvidenceByExternalIdentity({
+      providerId: "sap.connector",
+      externalSystem: "sap.s4hana",
+      externalType: "equipment.number",
+      externalId: "RESS-14",
+    }, "enterprise/new/RESS-14")).resolves.toEqual({
+      assetStableEntityId: "11111111-1111-4111-8111-111111111111",
+      assetIdentityProof: "signed-stable-proof",
+      candidateAssetPath: "enterprise/new/RESS-14",
+      expiresAt: "2026-09-09T08:05:00.000Z",
+    });
+  });
 });

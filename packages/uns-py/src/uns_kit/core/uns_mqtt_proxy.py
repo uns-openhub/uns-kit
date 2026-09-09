@@ -151,10 +151,20 @@ class UnsMqttProxy(UnsProxy):
         asset_stable_entity_id = mqtt_message.get("assetStableEntityId")
         asset_display_name = mqtt_message.get("assetDisplayName")
         asset_identity_proof = mqtt_message.get("assetIdentityProof")
+        asset_provider_identity = mqtt_message.get("assetProviderIdentity")
+        asset_provider_identity_proof = mqtt_message.get("assetProviderIdentityProof")
         has_asset_identity_metadata = any(
             value is not None
             for value in (asset_stable_entity_id, asset_display_name, asset_identity_proof)
         )
+        has_asset_provider_identity_metadata = any(
+            value is not None
+            for value in (asset_provider_identity, asset_provider_identity_proof)
+        )
+        if has_asset_identity_metadata and has_asset_provider_identity_metadata:
+            raise ValueError(
+                "Stable Asset identity metadata and provider candidate metadata are mutually exclusive."
+            )
         if has_asset_identity_metadata:
             if (
                 not isinstance(asset_stable_entity_id, str)
@@ -169,6 +179,22 @@ class UnsMqttProxy(UnsProxy):
                 raise ValueError(
                     "Asset identity metadata requires assetStableEntityId and assetIdentityProof; "
                     "assetDisplayName must be non-empty when supplied."
+                )
+        if has_asset_provider_identity_metadata:
+            required_provider_fields = ("providerId", "externalSystem", "externalType", "externalId")
+            if (
+                not isinstance(asset_provider_identity, dict)
+                or not isinstance(asset_provider_identity_proof, str)
+                or not asset_provider_identity_proof.strip()
+                or any(
+                    not isinstance(asset_provider_identity.get(field), str)
+                    or not asset_provider_identity[field].strip()
+                    for field in required_provider_fields
+                )
+            ):
+                raise ValueError(
+                    "Provider Asset identity metadata requires providerId, externalSystem, "
+                    "externalType, externalId, and assetProviderIdentityProof."
                 )
         object_type = mqtt_message.get("objectType")
         object_type_description = mqtt_message.get("objectTypeDescription")
@@ -226,6 +252,19 @@ class UnsMqttProxy(UnsProxy):
                         "assetIdentityProof": asset_identity_proof.strip(),
                     }
                     if has_asset_identity_metadata
+                    else {}
+                ),
+                **(
+                    {
+                        "assetProviderIdentity": {
+                            "providerId": asset_provider_identity["providerId"].strip().lower(),
+                            "externalSystem": asset_provider_identity["externalSystem"].strip().lower(),
+                            "externalType": asset_provider_identity["externalType"].strip().lower(),
+                            "externalId": asset_provider_identity["externalId"].strip(),
+                        },
+                        "assetProviderIdentityProof": asset_provider_identity_proof.strip(),
+                    }
+                    if has_asset_provider_identity_metadata
                     else {}
                 ),
                 "objectType": object_type,
@@ -394,6 +433,14 @@ class UnsMqttProxy(UnsProxy):
                         "assetIdentityProof": msg["assetIdentityProof"],
                     }
                     if msg.get("assetStableEntityId") is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "assetProviderIdentity": msg["assetProviderIdentity"],
+                        "assetProviderIdentityProof": msg["assetProviderIdentityProof"],
+                    }
+                    if msg.get("assetProviderIdentity") is not None
                     else {}
                 ),
                 "objectType": msg.get("objectType"),

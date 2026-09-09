@@ -204,4 +204,43 @@ describe("UNS produced topic metadata", () => {
     expect(event?.producedTopics[0]).not.toHaveProperty("assetStableEntityId");
     expect(event?.producedTopics[0]).not.toHaveProperty("assetIdentityProof");
   });
+
+  it("publishes and rotates provider-bound Asset candidate evidence atomically", () => {
+    const proxy = new TestUnsProxy();
+    const events: UnsEvents["unsProxyProducedTopics"][] = [];
+    proxy.event.on("unsProxyProducedTopics", value => events.push(value));
+    const baseTopic = {
+      timestamp: "2026-09-09T08:00:00.000Z",
+      topic: "enterprise/site-a/presses/",
+      asset: "RESS-14",
+      objectType: "equipment",
+      objectId: "main",
+      attribute: "state",
+      attributeType: UnsAttributeType.Data,
+      description: "Press state",
+      tags: null,
+      attributeNeedsPersistence: true,
+      dataGroup: "",
+      assetProviderIdentity: {
+        providerId: "sap.connector",
+        externalSystem: "sap.s4hana",
+        externalType: "equipment.number",
+        externalId: "RESS-14",
+      },
+    } as const;
+
+    proxy.register({ ...baseTopic, assetProviderIdentityProof: "provider-proof-1" });
+    proxy.register({
+      ...baseTopic,
+      timestamp: "2026-09-09T08:01:00.000Z",
+      assetProviderIdentityProof: "provider-proof-2",
+    });
+
+    expect(events).toHaveLength(2);
+    expect(events[1]?.producedTopics[0]).toMatchObject({
+      assetProviderIdentity: baseTopic.assetProviderIdentity,
+      assetProviderIdentityProof: "provider-proof-2",
+    });
+    expect(events[1]?.producedTopics[0]).not.toHaveProperty("assetStableEntityId");
+  });
 });

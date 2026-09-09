@@ -194,6 +194,10 @@ export default class UnsProxy {
             ...(topicObject.assetDisplayName ? { assetDisplayName: topicObject.assetDisplayName } : {}),
             assetIdentityProof: topicObject.assetIdentityProof,
           } : {}),
+          ...(topicObject.assetProviderIdentity && topicObject.assetProviderIdentityProof ? {
+            assetProviderIdentity: topicObject.assetProviderIdentity,
+            assetProviderIdentityProof: topicObject.assetProviderIdentityProof,
+          } : {}),
           objectType: topicObject.objectType,
           objectTypeDescription: topicObject.objectTypeDescription,
           objectId: topicObject.objectId,
@@ -210,7 +214,9 @@ export default class UnsProxy {
         existing.timestamp = topicObject.timestamp;
         const identityChanged = existing.assetStableEntityId !== topicObject.assetStableEntityId
           || existing.assetDisplayName !== topicObject.assetDisplayName
-          || existing.assetIdentityProof !== topicObject.assetIdentityProof;
+          || existing.assetIdentityProof !== topicObject.assetIdentityProof
+          || JSON.stringify(existing.assetProviderIdentity) !== JSON.stringify(topicObject.assetProviderIdentity)
+          || existing.assetProviderIdentityProof !== topicObject.assetProviderIdentityProof;
         if (topicObject.assetStableEntityId && topicObject.assetIdentityProof) {
           existing.assetStableEntityId = topicObject.assetStableEntityId;
           existing.assetIdentityProof = topicObject.assetIdentityProof;
@@ -220,6 +226,13 @@ export default class UnsProxy {
           delete existing.assetStableEntityId;
           delete existing.assetDisplayName;
           delete existing.assetIdentityProof;
+        }
+        if (topicObject.assetProviderIdentity && topicObject.assetProviderIdentityProof) {
+          existing.assetProviderIdentity = topicObject.assetProviderIdentity;
+          existing.assetProviderIdentityProof = topicObject.assetProviderIdentityProof;
+        } else {
+          delete existing.assetProviderIdentity;
+          delete existing.assetProviderIdentityProof;
         }
         if (identityChanged) this.emitProducedTopics();
       }

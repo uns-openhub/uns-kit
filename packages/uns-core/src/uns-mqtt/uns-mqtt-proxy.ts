@@ -54,6 +54,13 @@ type InternalMqttMessage = {
   assetStableEntityId?: string;
   assetDisplayName?: string;
   assetIdentityProof?: string;
+  assetProviderIdentity?: {
+    providerId: string;
+    externalSystem: string;
+    externalType: string;
+    externalId: string;
+  };
+  assetProviderIdentityProof?: string;
   objectType: UnsObjectType;
   objectTypeDescription?: string;
   objectId: UnsObjectId;
@@ -413,6 +420,8 @@ export default class UnsMqttProxy extends UnsProxy {
       assetStableEntityId,
       assetDisplayName,
       assetIdentityProof,
+      assetProviderIdentity,
+      assetProviderIdentityProof,
       objectType,
       objectTypeDescription,
       objectId,
@@ -421,6 +430,11 @@ export default class UnsMqttProxy extends UnsProxy {
     const hasAssetIdentityMetadata = assetStableEntityId !== undefined
       || assetDisplayName !== undefined
       || assetIdentityProof !== undefined;
+    const hasAssetProviderIdentityMetadata = assetProviderIdentity !== undefined
+      || assetProviderIdentityProof !== undefined;
+    if (hasAssetIdentityMetadata && hasAssetProviderIdentityMetadata) {
+      throw new Error("Stable Asset identity metadata and provider candidate metadata are mutually exclusive.");
+    }
     if (hasAssetIdentityMetadata) {
       if (
         typeof assetStableEntityId !== "string"
@@ -431,6 +445,19 @@ export default class UnsMqttProxy extends UnsProxy {
           && (typeof assetDisplayName !== "string" || !assetDisplayName.trim()))
       ) {
         throw new Error("Asset identity metadata requires assetStableEntityId and assetIdentityProof; assetDisplayName must be non-empty when supplied.");
+      }
+    }
+    if (hasAssetProviderIdentityMetadata) {
+      const identity = assetProviderIdentity as Record<string, unknown> | undefined;
+      if (
+        !identity
+        || typeof assetProviderIdentityProof !== "string"
+        || !assetProviderIdentityProof.trim()
+        || ["providerId", "externalSystem", "externalType", "externalId"].some(
+          (key) => typeof identity[key] !== "string" || !(identity[key] as string).trim(),
+        )
+      ) {
+        throw new Error("Provider Asset identity metadata requires providerId, externalSystem, externalType, externalId, and assetProviderIdentityProof.");
       }
     }
     for (const attrEntry of attrs) {
@@ -452,6 +479,15 @@ export default class UnsMqttProxy extends UnsProxy {
           assetStableEntityId: assetStableEntityId!.trim().toLowerCase(),
           ...(assetDisplayName ? { assetDisplayName: assetDisplayName.trim() } : {}),
           assetIdentityProof: assetIdentityProof!.trim(),
+        } : {}),
+        ...(hasAssetProviderIdentityMetadata ? {
+          assetProviderIdentity: {
+            providerId: assetProviderIdentity!.providerId.trim().toLowerCase(),
+            externalSystem: assetProviderIdentity!.externalSystem.trim().toLowerCase(),
+            externalType: assetProviderIdentity!.externalType.trim().toLowerCase(),
+            externalId: assetProviderIdentity!.externalId.trim(),
+          },
+          assetProviderIdentityProof: assetProviderIdentityProof!.trim(),
         } : {}),
         objectType,
         objectTypeDescription,
@@ -624,6 +660,8 @@ export default class UnsMqttProxy extends UnsProxy {
         assetStableEntityId: msg.assetStableEntityId,
         assetDisplayName: msg.assetDisplayName,
         assetIdentityProof: msg.assetIdentityProof,
+        assetProviderIdentity: msg.assetProviderIdentity,
+        assetProviderIdentityProof: msg.assetProviderIdentityProof,
         objectType,
         objectTypeDescription,
         objectId,

@@ -72,6 +72,17 @@ export type AssetIdentityPublicationMetadata = {
   expiresAt: string;
 };
 
+export type AssetProviderIdentityPublicationMetadata = {
+  assetProviderIdentity: ProviderAssetIdentity;
+  assetProviderIdentityProof: string;
+  candidateAssetPath: string;
+  expiresAt: string;
+};
+
+export type AssetIdentityPublicationEvidenceMetadata =
+  | AssetIdentityPublicationMetadata
+  | AssetProviderIdentityPublicationMetadata;
+
 export class RangeResult<Row extends unknown[] = unknown[]> {
   readonly data: Row[];
   readonly stats?: RangeStats | null;
@@ -438,6 +449,68 @@ export class UnsClient {
       "IssueAssetIdentityPublicationProofByExternalIdentity",
       options.token,
     );
+  }
+
+  async issueAssetIdentityPublicationEvidenceByExternalIdentity(
+    identity: ProviderAssetIdentity,
+    candidateAssetPath: string,
+    options: { token?: string } = {},
+  ): Promise<AssetIdentityPublicationEvidenceMetadata> {
+    const token = options.token ?? (await this.ensureToken());
+    const query = `mutation IssueAssetIdentityPublicationEvidenceByExternalIdentity(
+      $input: ProviderAssetIdentityPublicationProofInput!
+    ) {
+      IssueAssetIdentityPublicationEvidenceByExternalIdentity(input: $input) {
+        mode
+        proof
+        stableEntityId
+        providerId
+        externalSystem
+        externalType
+        externalId
+        candidateAssetPath
+        expiresAt
+      }
+    }`;
+    const payload = await this.requestJson(
+      "POST",
+      this.graphqlUrl,
+      { query, variables: { input: { ...identity, candidateAssetPath } } },
+      token,
+    );
+    const errors = Array.isArray(payload.errors) ? payload.errors : [];
+    if (errors.length > 0) {
+      const message = errors.map((error) => this.graphqlErrorMessage(error)).filter(Boolean).join("; ");
+      throw new ClientError(`Asset identity evidence request failed: ${message || "GraphQL returned an error."}`);
+    }
+    const data = this.objectValue(payload.data);
+    const evidence = this.objectValue(data?.IssueAssetIdentityPublicationEvidenceByExternalIdentity);
+    const mode = this.requiredResponseString(evidence?.mode, "mode");
+    const proof = this.requiredResponseString(evidence?.proof, "proof");
+    const path = this.requiredResponseString(evidence?.candidateAssetPath, "candidateAssetPath");
+    const expiresAt = this.requiredResponseString(evidence?.expiresAt, "expiresAt");
+    if (mode === "stable") {
+      return {
+        assetStableEntityId: this.requiredResponseString(evidence?.stableEntityId, "stableEntityId").toLowerCase(),
+        assetIdentityProof: proof,
+        candidateAssetPath: path,
+        expiresAt,
+      };
+    }
+    if (mode === "provider-candidate") {
+      return {
+        assetProviderIdentity: {
+          providerId: this.requiredResponseString(evidence?.providerId, "providerId").toLowerCase(),
+          externalSystem: this.requiredResponseString(evidence?.externalSystem, "externalSystem").toLowerCase(),
+          externalType: this.requiredResponseString(evidence?.externalType, "externalType").toLowerCase(),
+          externalId: this.requiredResponseString(evidence?.externalId, "externalId"),
+        },
+        assetProviderIdentityProof: proof,
+        candidateAssetPath: path,
+        expiresAt,
+      };
+    }
+    throw new ClientError(`Asset identity evidence response used unsupported mode: ${mode}.`);
   }
 
   private async requestAssetIdentityPublicationProof(

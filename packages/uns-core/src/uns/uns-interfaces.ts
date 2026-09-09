@@ -326,11 +326,20 @@ type AttributePayload =
 
 export type IMqttAttributeEntry = IMqttAttributeMessage & AttributePayload;
 
+export type IAssetProviderIdentity = {
+  providerId: string;
+  externalSystem: string;
+  externalType: string;
+  externalId: string;
+};
+
 export type IAssetIdentityPublicationMetadata =
   | {
       assetStableEntityId?: never;
       assetDisplayName?: never;
       assetIdentityProof?: never;
+      assetProviderIdentity?: never;
+      assetProviderIdentityProof?: never;
     }
   | {
       /** Controller-issued stable Asset UUID. It identifies the Asset, not its current path. */
@@ -339,6 +348,17 @@ export type IAssetIdentityPublicationMetadata =
       assetDisplayName?: string;
       /** Short-lived controller-signed proof bound to this Asset UUID and exact candidate path. */
       assetIdentityProof: string;
+      assetProviderIdentity?: never;
+      assetProviderIdentityProof?: never;
+    }
+  | {
+      assetStableEntityId?: never;
+      assetDisplayName?: never;
+      assetIdentityProof?: never;
+      /** Reviewed provider namespace plus external identifier for a provisional no-ID Asset. */
+      assetProviderIdentity: IAssetProviderIdentity;
+      /** Short-lived controller-signed proof bound to the provider identifier and exact candidate path. */
+      assetProviderIdentityProof: string;
     };
 
 export type IMqttPublishRequest = {
@@ -439,6 +459,10 @@ export interface ITopicObject {
   assetDisplayName?: string;
   /** Short-lived controller-signed evidence for this exact Asset path. */
   assetIdentityProof?: string;
+  /** Reviewed provider namespace plus external identifier for a provisional no-ID Asset. */
+  assetProviderIdentity?: IAssetProviderIdentity;
+  /** Short-lived controller-signed evidence for this provider identifier and exact Asset path. */
+  assetProviderIdentityProof?: string;
   objectType: UnsObjectType;
   objectTypeDescription?: string;
   objectId: UnsObjectId;

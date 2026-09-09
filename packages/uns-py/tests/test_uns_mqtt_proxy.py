@@ -99,6 +99,71 @@ async def test_publish_mqtt_message_rejects_partial_asset_identity_metadata() ->
 
 
 @pytest.mark.asyncio
+async def test_publish_mqtt_message_carries_provider_asset_candidate_evidence() -> None:
+    proxy = UnsMqttProxy(
+        "localhost",
+        process_name="test-process",
+        instance_name="test-instance",
+    )
+
+    async def fake_publish_raw(topic: str, payload: str | bytes, *, qos: int = 0, retain: bool = False) -> None:
+        return None
+
+    proxy.client.publish_raw = fake_publish_raw  # type: ignore[method-assign]
+    request = {
+        "topic": "enterprise/site-a/presses",
+        "asset": "RESS-14",
+        "assetProviderIdentity": {
+            "providerId": "SAP.Connector",
+            "externalSystem": "SAP.S4HANA",
+            "externalType": "Equipment.Number",
+            "externalId": "RESS-14",
+        },
+        "assetProviderIdentityProof": "provider-proof-1",
+        "attributes": {"attribute": "state", "data": {"value": "READY"}},
+    }
+
+    await proxy.publish_mqtt_message(request)
+    produced_topic = next(iter(proxy._produced_topics.values()))
+    assert produced_topic["assetProviderIdentity"] == {
+        "providerId": "sap.connector",
+        "externalSystem": "sap.s4hana",
+        "externalType": "equipment.number",
+        "externalId": "RESS-14",
+    }
+    assert produced_topic["assetProviderIdentityProof"] == "provider-proof-1"
+    assert "assetStableEntityId" not in produced_topic
+    await proxy._stop_publish_workers()
+
+
+@pytest.mark.asyncio
+async def test_publish_mqtt_message_rejects_mixed_asset_identity_modes() -> None:
+    proxy = UnsMqttProxy(
+        "localhost",
+        process_name="test-process",
+        instance_name="test-instance",
+    )
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        await proxy.publish_mqtt_message(
+            {
+                "topic": "enterprise/site-a/presses",
+                "asset": "RESS-14",
+                "assetStableEntityId": "11111111-1111-4111-8111-111111111111",
+                "assetIdentityProof": "stable-proof",
+                "assetProviderIdentity": {
+                    "providerId": "sap.connector",
+                    "externalSystem": "sap.s4hana",
+                    "externalType": "equipment.number",
+                    "externalId": "RESS-14",
+                },
+                "assetProviderIdentityProof": "provider-proof",
+                "attributes": {"attribute": "state", "data": {"value": "READY"}},
+            }
+        )
+    await proxy._stop_publish_workers()
+
+
+@pytest.mark.asyncio
 async def test_publish_message_uses_bounded_concurrency() -> None:
     proxy = UnsMqttProxy(
         "localhost",

@@ -9,6 +9,25 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.19 - Provider-bound Asset identity candidates
+
+Apply this migration when upgrading a publisher from `@uns-kit/core` `<3.0.19`
+to `>=3.0.19` only when it should identify an Asset through a reviewed provider
+namespace before an external identifier has been mapped to a stable entity.
+
+Use `UnsClient.issueAssetIdentityPublicationEvidenceByExternalIdentity()`.
+The result is directly publishable metadata in one of two mutually exclusive
+modes:
+
+- an existing provider mapping returns `assetStableEntityId` and
+  `assetIdentityProof`, preserving the normal stable-identity transition;
+- a new provider identifier returns `assetProviderIdentity` and
+  `assetProviderIdentityProof`, allowing the controller to collect signed,
+  workload-bound evidence for manual review without auto-merging Assets.
+
+Do not combine the two metadata sets or persist/reuse an expired proof. Legacy
+publishers need no change and continue to publish without identity metadata.
+
 ## 3.0.15 - Secret references in database configuration
 
 `@uns-kit/database` now accepts the standard environment and Infisical secret

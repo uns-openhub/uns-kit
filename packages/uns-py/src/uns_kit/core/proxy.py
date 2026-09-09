@@ -83,7 +83,13 @@ class UnsProxy:
             return
 
         existing = self._produced_topics[full_topic]
-        identity_keys = ("assetStableEntityId", "assetDisplayName", "assetIdentityProof")
+        identity_keys = (
+            "assetStableEntityId",
+            "assetDisplayName",
+            "assetIdentityProof",
+            "assetProviderIdentity",
+            "assetProviderIdentityProof",
+        )
         identity_changed = any(existing.get(key) != topic_object.get(key) for key in identity_keys)
         for key in identity_keys:
             if key in topic_object:
