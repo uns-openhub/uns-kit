@@ -7,12 +7,12 @@ For the MQTT topic registry published by the API plugin, see `../../docs/uns-top
 
 ## uns-kit in context
 
-| Package | Description |
-| --- | --- |
+| Package                                                                               | Description                                                                 |
+| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | [`@uns-kit/core`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-core) | Base runtime (UnsProxyProcess, MQTT helpers, config tooling, gRPC gateway). |
-| [`@uns-kit/api`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-api) | Express plugin — HTTP endpoints, JWT/JWKS auth, Swagger, UNS metadata. |
-| [`@uns-kit/cron`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cron) | Cron-driven scheduler that emits UNS events on a fixed cadence. |
-| [`@uns-kit/cli`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cli) | CLI for scaffolding new UNS applications. |
+| [`@uns-kit/api`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-api)   | Express plugin — HTTP endpoints, JWT/JWKS auth, Swagger, UNS metadata.      |
+| [`@uns-kit/cron`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cron) | Cron-driven scheduler that emits UNS events on a fixed cadence.             |
+| [`@uns-kit/cli`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cli)   | CLI for scaffolding new UNS applications.                                   |
 
 ## Installation
 
@@ -32,6 +32,7 @@ npm install @uns-kit/api
 4. Listen to `apiGetEvent` / `apiPostEvent` to handle incoming requests.
 
 Every registered endpoint is:
+
 - Automatically secured with JWT/JWKS or a shared secret.
 - Published to the UNS controller as an API metadata record (topic, host, path, method).
 - Added to the Swagger spec served at `/<processName>/<instanceName>/swagger.json`.
@@ -39,10 +40,10 @@ Every registered endpoint is:
 ## GET endpoint example
 
 ```ts
-import UnsProxyProcess from "@uns-kit/core/uns/uns-proxy-process";
-import type { UnsEvents } from "@uns-kit/core";
 import "@uns-kit/api";
 import { type UnsProxyProcessWithApi } from "@uns-kit/api";
+import type { UnsEvents } from "@uns-kit/core";
+import UnsProxyProcess from "@uns-kit/core/uns/uns-proxy-process";
 
 const config = await ConfigFile.loadConfig();
 const proc = new UnsProxyProcess(config.infra.host!, { processName: config.uns.processName }) as UnsProxyProcessWithApi;
@@ -54,23 +55,16 @@ const api = await proc.createApiProxy("my-service", {
 
 // Register a GET endpoint
 // Signature: api.get(topic, asset, objectType, objectId, attribute, options?)
-await api.get(
-  "enterprise/site/area/line/",
-  "line-3-furnace",
-  "energy-resource",
-  "main-bus",
-  "current",
-  {
-    tags: ["Energy"],
-    apiDescription: "Current reading for line-3-furnace main-bus",
-    queryParams: [
-      { name: "from",  type: "string", required: false, description: "Start of time range (ISO 8601)", chatCanonical: "from" },
-      { name: "to",    type: "string", required: false, description: "End of time range (ISO 8601)",   chatCanonical: "to"   },
-      { name: "limit", type: "number", required: false, description: "Maximum records",                chatCanonical: "limit", defaultValue: 100 },
-    ],
-    chatDefaults: { limit: 100 },
-  }
-);
+await api.get("enterprise/site/area/line/", "line-3-furnace", "energy-resource", "main-bus", "current", {
+  tags: ["Energy"],
+  apiDescription: "Current reading for line-3-furnace main-bus",
+  queryParams: [
+    { name: "from", type: "string", required: false, description: "Start of time range (ISO 8601)", chatCanonical: "from" },
+    { name: "to", type: "string", required: false, description: "End of time range (ISO 8601)", chatCanonical: "to" },
+    { name: "limit", type: "number", required: false, description: "Maximum records", chatCanonical: "limit", defaultValue: 100 },
+  ],
+  chatDefaults: { limit: 100 },
+});
 
 // Handle incoming GET requests
 api.event.on("apiGetEvent", (event: UnsEvents["apiGetEvent"]) => {
@@ -85,29 +79,22 @@ api.event.on("apiGetEvent", (event: UnsEvents["apiGetEvent"]) => {
 ```ts
 // Register a POST endpoint
 // Signature: api.post(topic, asset, objectType, objectId, attribute, options?)
-await api.post(
-  "enterprise/site/area/line/",
-  "line-3-furnace",
-  "energy-resource",
-  "main-bus",
-  "setpoint",
-  {
-    tags: ["Energy"],
-    apiDescription: "Write a new setpoint for line-3-furnace main-bus",
-    requestBody: {
-      description: "Setpoint payload",
-      required: true,
-      schema: {
-        type: "object",
-        required: ["value"],
-        properties: {
-          value: { type: "number", description: "Target setpoint value" },
-          unit:  { type: "string", description: "Unit of measurement, e.g. A" },
-        },
+await api.post("enterprise/site/area/line/", "line-3-furnace", "energy-resource", "main-bus", "setpoint", {
+  tags: ["Energy"],
+  apiDescription: "Write a new setpoint for line-3-furnace main-bus",
+  requestBody: {
+    description: "Setpoint payload",
+    required: true,
+    schema: {
+      type: "object",
+      required: ["value"],
+      properties: {
+        value: { type: "number", description: "Target setpoint value" },
+        unit: { type: "string", description: "Unit of measurement, e.g. A" },
       },
     },
-  }
-);
+  },
+});
 
 // Handle incoming POST requests — body is pre-parsed JSON
 api.event.on("apiPostEvent", (event: UnsEvents["apiPostEvent"]) => {
@@ -122,6 +109,7 @@ api.event.on("apiPostEvent", (event: UnsEvents["apiPostEvent"]) => {
 ```ts
 import "@uns-kit/api";
 import {
+  type UnsProxyProcessWithApi,
   defineDataCatalogField,
   defineDataCatalogOfferSource,
   defineDataCatalogQueryParam,
@@ -129,7 +117,6 @@ import {
   defineServiceApi,
   projectRowsForDataCatalogSchema,
   registerApiCatalog,
-  type UnsProxyProcessWithApi,
 } from "@uns-kit/api";
 import { ConfigFile, UnsProxyProcess } from "@uns-kit/core";
 
@@ -232,19 +219,17 @@ const dataOfferSources = {
     description: "Browse production orders.",
     method: "GET",
     tags: ["orders"],
-    queryParams: [
-      defineDataCatalogQueryParam("status", "Optional status filter"),
-    ],
+    queryParams: [defineDataCatalogQueryParam("status", "Optional status filter")],
     schema: productionOrdersSchema,
     response: {
       statusCode: "200",
       contentType: "application/json",
     },
     handler: async (event: any) => {
-      const statusFilter = String(event.req.query.status ?? "").trim().toLowerCase();
-      const filteredRows = statusFilter
-        ? orderRows.filter((row) => row.STATUS.toLowerCase() === statusFilter)
-        : orderRows;
+      const statusFilter = String(event.req.query.status ?? "")
+        .trim()
+        .toLowerCase();
+      const filteredRows = statusFilter ? orderRows.filter((row) => row.STATUS.toLowerCase() === statusFilter) : orderRows;
       const data = projectRowsForDataCatalogSchema(filteredRows, productionOrderRowSchema);
 
       event.res.json({
@@ -262,6 +247,32 @@ await registerApiCatalog(api, {
 });
 ```
 
+## Stream a Data Catalog Parquet export
+
+`writeSchemaRowsToParquetStream` accepts a synchronous or asynchronous row
+iterator and writes one Parquet row group at a time. It never collects the whole
+source in memory. Pass an already bounded/paged history or database iterator;
+the writer cannot reduce memory used by a source that loads every row first.
+
+```ts
+import { writeSchemaRowsToParquetStream } from "@uns-kit/api";
+
+const filePath = await writeSchemaRowsToParquetStream({
+  schema: rowSchema,
+  rows: historyRows(), // AsyncIterable<Record<string, unknown>>
+  rowGroupSize: 2_000,
+  signal: requestAbortSignal,
+});
+// Stream filePath to the caller, then remove it when the response closes.
+```
+
+The helper creates the output directory when needed, writes to a unique
+incomplete file, and renames it only after success. An error or cancellation
+removes the incomplete file and rejects the promise. The caller owns the
+completed file and its cleanup. The older `writeSchemaRowsToParquet` still
+returns `null` on failure for existing applications, but now also accepts a
+row iterator and the same row-group options.
+
 ## Endpoint signature
 
 ```
@@ -269,22 +280,22 @@ api.get(topic, asset, objectType, objectId, attribute, options?)
 api.post(topic, asset, objectType, objectId, attribute, options?)
 ```
 
-| Parameter | Type | Description |
-|---|---|---|
-| `topic` | `UnsTopics` | UNS topic path prefix (e.g. `"enterprise/site/area/line/"`) |
-| `asset` | `UnsAsset` | Asset identifier (e.g. `"line-3-furnace"`) |
-| `objectType` | `UnsObjectType` | UNS object type (e.g. `"energy-resource"`) |
-| `objectId` | `UnsObjectId` | Object instance id (e.g. `"main-bus"`) |
-| `attribute` | `UnsAttribute` | Attribute name (e.g. `"current"`) |
-| `options` | `IGetEndpointOptions` / `IPostEndpointOptions` | Tags, description, query params / request body |
+| Parameter    | Type                                           | Description                                                 |
+| ------------ | ---------------------------------------------- | ----------------------------------------------------------- |
+| `topic`      | `UnsTopics`                                    | UNS topic path prefix (e.g. `"enterprise/site/area/line/"`) |
+| `asset`      | `UnsAsset`                                     | Asset identifier (e.g. `"line-3-furnace"`)                  |
+| `objectType` | `UnsObjectType`                                | UNS object type (e.g. `"energy-resource"`)                  |
+| `objectId`   | `UnsObjectId`                                  | Object instance id (e.g. `"main-bus"`)                      |
+| `attribute`  | `UnsAttribute`                                 | Attribute name (e.g. `"current"`)                           |
+| `options`    | `IGetEndpointOptions` / `IPostEndpointOptions` | Tags, description, query params / request body              |
 
 ## Auth options
 
-| Option | When to use |
-|---|---|
+| Option                  | When to use                                                              |
+| ----------------------- | ------------------------------------------------------------------------ |
 | `jwks.wellKnownJwksUrl` | Production — verifies RS256 tokens from the UNS controller JWKS endpoint |
-| `jwks.activeKidUrl` | Optional companion to JWKS — narrows which key ID is active |
-| `jwtSecret` | Development / simple deployments — symmetric secret |
+| `jwks.activeKidUrl`     | Optional companion to JWKS — narrows which key ID is active              |
+| `jwtSecret`             | Development / simple deployments — symmetric secret                      |
 
 Requests that fail auth return `401 Unauthorized`. Requests whose token `accessRules` do not match the endpoint path return `403 Forbidden`.
 
