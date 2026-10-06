@@ -43,10 +43,10 @@ export default class UnsProxy {
   /**
    * Publishes the list of produced topics to the MQTT broker.
    */
-  private async emitProducedTopics(): Promise<void> {
+  private async emitProducedTopics(includeEmpty = false): Promise<void> {
     if (this.instanceStatusTopic !== "") {
       const topicsArray = [...this.producedTopics.values()];
-      if (topicsArray.length > 0) {
+      if (topicsArray.length > 0 || includeEmpty) {
         try {
           this.event.emit("unsProxyProducedTopics", { producedTopics: topicsArray, statusTopic: this.instanceStatusTopic + "topics" });
         } catch (error) {
@@ -55,6 +55,24 @@ export default class UnsProxy {
         logger.debug(`${this.instanceNameWithSuffix} - Published produced topics.`);
       }
     }
+  }
+
+  /**
+   * Reconcile this publisher's observed metadata with its configured targets.
+   * Does not register unseen targets, touch other publishers, clear MQTT values,
+   * remove UNS objects, or delete historical data. Empty snapshots are explicit.
+   */
+  public retainProducedTopics(fullTopics: Iterable<string>): number {
+    const retained = new Set(Array.from(fullTopics, topic => buildUnsIdentityPath(topic)));
+    let removed = 0;
+    for (const topic of this.producedTopics.keys()) {
+      if (!retained.has(topic)) {
+        this.producedTopics.delete(topic);
+        removed++;
+      }
+    }
+    if (removed > 0) void this.emitProducedTopics(true);
+    return removed;
   }
 
   /**

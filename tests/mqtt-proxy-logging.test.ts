@@ -1,28 +1,35 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { loggerMock, connectMock } = vi.hoisted(() => ({
-  loggerMock: {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  },
-  connectMock: vi.fn(),
-}));
+import MqttProxy, { formatMqttError } from "../packages/uns-core/src/uns-mqtt/mqtt-proxy.ts";
+
+// Resolve from the core package: pnpm does not expose its MQTT dependency at
+// the repository root, so a root-level mock would miss the runtime import.
+const { loggerMock, connectMock, mqttModulePath } = await vi.hoisted(async () => {
+  const { createRequire } = await import("node:module");
+  const coreRequire = createRequire(new URL("../packages/uns-core/package.json", import.meta.url));
+  return {
+    loggerMock: {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+    connectMock: vi.fn(),
+    mqttModulePath: coreRequire.resolve("mqtt"),
+  };
+});
 
 vi.mock("../packages/uns-core/src/logger.js", () => ({
   default: loggerMock,
 }));
 
-vi.mock("mqtt", () => ({
+vi.mock(mqttModulePath, () => ({
   default: {
     connect: connectMock,
   },
   connect: connectMock,
 }));
-
-import MqttProxy, { formatMqttError } from "../packages/uns-core/src/uns-mqtt/mqtt-proxy.ts";
 
 class FakeMqttClient extends EventEmitter {
   public connected = false;
@@ -127,7 +134,7 @@ describe("MqttProxy logging", () => {
       });
 
       const startPromise = proxy.start();
-      (proxy as any).handleMqttConnect();
+      client.emit("connect");
       await startPromise;
 
       expect(proxy.isConnected).toBe(true);
@@ -141,14 +148,12 @@ describe("MqttProxy logging", () => {
       proxy.isConnected = false;
       expect(proxy.isConnected).toBe(false);
 
-      (proxy as any).handleMqttConnect();
+      client.emit("connect");
       expect(proxy.isConnected).toBe(true);
       expect((proxy as any).statusUpdateInterval).toBe(statusInterval);
       expect((proxy as any).transformationStatsInterval).toBe(statsInterval);
       expect(
-        loggerMock.debug.mock.calls
-          .map(([message]) => String(message))
-          .filter((message) => message.includes("Subscribed to 1 topics.")),
+        loggerMock.debug.mock.calls.map(([message]) => String(message)).filter((message) => message.includes("Subscribed to 1 topics.")),
       ).toHaveLength(1);
     } finally {
       await proxy?.stop({ reason: "shutdown" });

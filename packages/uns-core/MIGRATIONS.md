@@ -9,6 +9,26 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.21 - Explicit publisher topic reconciliation
+
+Applications upgrading from `<3.0.21` to `>=3.0.21` can opt into
+`UnsProxy.retainProducedTopics(fullTopics)`. Pass the complete set of configured
+UNS attribute paths for that proxy. The method removes previously observed topic
+metadata outside that set and immediately announces the remaining metadata,
+including an empty list when the last observed topic is removed. It returns the
+number of removed entries. Configured paths that have never published data are
+not registered by this call.
+
+A bridge/runtime must stop accepting events for removed mappings and drain
+already accepted publications before reconciliation; a later publication can
+register its topic again. Keep configured-but-stopped mappings and shared targets
+in the retained set. Connection Stop alone is not a reason to remove metadata.
+
+This API affects only the proxy's publisher metadata cache. It does not delete
+UNS definitions, retained MQTT business values, archiver mappings, historical
+sources or physical data. Existing publishers need no change; their default
+registration and heartbeat behavior remains the same.
+
 ## 3.0.19 - Provider-bound Asset identity candidates
 
 Apply this migration when upgrading a publisher from `@uns-kit/core` `<3.0.19`
