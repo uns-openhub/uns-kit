@@ -9,6 +9,23 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.22 - Safe API request correlation
+
+When upgrading `@uns-kit/api` from `<3.0.22` to `>=3.0.22`, its generic request
+log no longer records raw URLs or email claims decoded from an unverified JWT.
+It logs a server-generated `requestId`, HTTP method, completion status and
+elapsed time. Incoming `x-request-id` values are not reused. The response
+`x-request-id` and request property `Symbol.for("uns.http.request-id")` identify
+the same server-local request; authenticated application handlers may reuse that
+property for downstream query diagnostics. The public `@uns-kit/api/request-log.js`
+module exports `SAFE_REQUEST_LOGGING_VERSION = 1` so privacy-sensitive applications
+can require the safe middleware before opening HTTP listeners.
+
+If an application's diagnostic logic relied on the old `user` or `endpoint`
+log fields, migrate it to operation labels and caller IDs extracted **after**
+signature verification. Do not restore URL/topic/body/credential logging or trust
+identity headers. API response payloads and authorization behavior are unchanged.
+
 ## 3.0.21 - Explicit publisher topic reconciliation
 
 Applications upgrading from `<3.0.21` to `>=3.0.21` can opt into
