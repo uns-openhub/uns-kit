@@ -38,7 +38,7 @@
   },
   "dependencies": {
     "@uns-kit/core": "workspace:*",
-    "zod": "^4.4.3"
+    "zod": "^4.5.4"
   },
   "peerDependencies": {
     "better-sqlite3": "^11.0.0",
