@@ -41,7 +41,7 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0",
-    "hyparquet-writer": "^0.16.5",
+    "hyparquet-writer": "^0.16.9",
     "uuid": "^14.0.1"
   },
   "devDependencies": {
