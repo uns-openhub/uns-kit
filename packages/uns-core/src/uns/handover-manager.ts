@@ -1,4 +1,5 @@
 import logger from "../logger.js";
+import { runHandoverShutdown, validateHandoverShutdown, type HandoverShutdownHooks } from "./handover-shutdown.js";
 import { HandoverManagerEvents } from "../uns-mqtt/mqtt-interfaces.js";
 import MqttProxy from "../uns-mqtt/mqtt-proxy.js";
 import { MqttTopicBuilder } from "../uns-mqtt/mqtt-topic-builder.js";
@@ -31,6 +32,10 @@ export class HandoverManager {
   private readonly handoverId: string | undefined;
   private acceptedHandoverId: string | undefined;
   private active: boolean = false;
+  private sourcePeerId: string | undefined;
+  private sourcePreparation: Promise<void> | undefined;
+  private sourceExit: Promise<void> | undefined;
+  private readonly shutdownHooks: HandoverShutdownHooks | undefined;
   public handoverRequestEnabled: boolean = false;
   public handoverEnabled: boolean = true;
   public forceStartEnabled: boolean = false;
@@ -44,7 +49,10 @@ export class HandoverManager {
     handoverEnabled: boolean,
     forceStartEnabled: boolean,
     handoverId?: string,
+    shutdownHooks?: HandoverShutdownHooks,
   ) {
+    validateHandoverShutdown(shutdownHooks);
+    this.shutdownHooks = shutdownHooks ? { ...shutdownHooks } : undefined;
     this.processName = processName;
     this.processId = processId;
     this.mqttProxy = mqttProxy;
@@ -238,57 +246,41 @@ export class HandoverManager {
   /**
    * Handles handovers.
    */
-  private async handleHandover(event: UnsEvents["input"]): Promise<void> {
-    try {
-      const response = JSON.parse(event.message.toString());
-      // Responder process
-      // Check if the message is a handover request and publish MULTIPLE handover_subscriber messages
-      if (response.type === "handover_request") {
-        const handoverId = this.getHandoverId(response, event);
-        this.acceptedHandoverId = handoverId;
-        logger.info(
-          `${this.processName} - Received handover request from ${event.packet?.properties?.userProperties?.processName}. Accepting handover.`,
-        );
+  private exitSource(code: number): void {
+    process.exit(code);
+  }
 
-        // Set all UNS proxy instance subscribers to passive and drain the queue.
-        const mqttWorkerData: UnsEvents["mqttWorker"][] = [];
-        for (let i = 0; i < this.unsMqttProxies.length; i++) {
-          const unsProxy = this.unsMqttProxies[i];
-          const workerData = await unsProxy.setSubscriberPassiveAndDrainQueue();
-          mqttWorkerData.push(workerData);
-        }
-        logger.info(`${this.processName} - Handover request accepted. Sending handover_subscriber messages.`);
+  private async prepareSourceHandover(response: any, event: UnsEvents["input"]): Promise<void> {
+    const handoverId = this.getHandoverId(response, event);
 
-        // Publish handover_subscriber messages for each instance that has processed some data.
-        for (let i = 0; i < mqttWorkerData.length; i++) {
-          const workerData = mqttWorkerData[i];
-          if (workerData.batchSize > 0) {
-            await this.mqttProxy.publish(
-              event.packet.properties?.responseTopic ?? "",
-              this.handoverPayload("handover_subscriber", handoverId, {
-                batchSize: workerData.batchSize,
-                referenceHash: workerData.referenceHash,
-                instanceName: workerData.instanceName,
-              }),
-              {
-                retain: false,
-                properties: {
-                  responseTopic: this.topicBuilder.getHandoverTopic(),
-                  userProperties: this.getUserProperties(handoverId),
-                },
-              },
-            );
-          }
-        }
-        logger.info(`${this.processName} - Handover subscriber messages sent.`);
+    logger.info(
+      `${this.processName} - Received handover request from ${event.packet?.properties?.userProperties?.processName}. Accepting handover.`,
+    );
 
-        // Publish a single handover acknowledgment only when all
-        // handover_subscriber messages have been sent
-        this.active = false;
-        this.event.emit("handoverManager", { active: this.active });
+    this.active = false;
+    this.event.emit("handoverManager", { active: false });
+    this.shutdownHooks?.onRelease?.();
+
+    // Set all UNS proxy instance subscribers to passive and drain the queue.
+    const mqttWorkerData: UnsEvents["mqttWorker"][] = [];
+    for (let i = 0; i < this.unsMqttProxies.length; i++) {
+      const unsProxy = this.unsMqttProxies[i];
+      const workerData = await unsProxy.setSubscriberPassiveAndDrainQueue();
+      mqttWorkerData.push(workerData);
+    }
+    logger.info(`${this.processName} - Handover request accepted. Sending handover_subscriber messages.`);
+
+    // Publish handover_subscriber messages for each instance that has processed some data.
+    for (let i = 0; i < mqttWorkerData.length; i++) {
+      const workerData = mqttWorkerData[i];
+      if (workerData.batchSize > 0) {
         await this.mqttProxy.publish(
           event.packet.properties?.responseTopic ?? "",
-          this.handoverPayload("handover_fin", handoverId),
+          this.handoverPayload("handover_subscriber", handoverId, {
+            batchSize: workerData.batchSize,
+            referenceHash: workerData.referenceHash,
+            instanceName: workerData.instanceName,
+          }),
           {
             retain: false,
             properties: {
@@ -297,18 +289,74 @@ export class HandoverManager {
             },
           },
         );
-        logger.info(`${this.processName} - Handover fin message sent.`);
+      }
+    }
+    logger.info(`${this.processName} - Handover subscriber messages sent.`);
 
-        this.handoverInProgress = false;
-        this.requestingHandover = false;
+    // Publish a single handover acknowledgment only when all
+    // handover_subscriber messages have been sent
+    await this.mqttProxy.publish(
+      event.packet.properties?.responseTopic ?? "",
+      this.handoverPayload("handover_fin", handoverId),
+      {
+        retain: false,
+        properties: {
+          responseTopic: this.topicBuilder.getHandoverTopic(),
+          userProperties: this.getUserProperties(handoverId),
+        },
+      },
+    );
+    logger.info(`${this.processName} - Handover fin message sent.`);
 
-        await Promise.all(this.unsMqttProxies.map((unsProxy: UnsMqttProxy) => unsProxy.stop()));
+    await Promise.all(this.unsMqttProxies.map((unsProxy: UnsMqttProxy) => unsProxy.stop()));
+  }
+
+  private async finishSourceHandover(): Promise<void> {
+    const result = await runHandoverShutdown(async () => {
+      await this.sourcePreparation;
+      await this.shutdownHooks?.drain();
+    }, this.shutdownHooks?.timeoutMs ?? 30_000);
+    this.handoverInProgress = false;
+    this.requestingHandover = false;
+    if (result === "completed") {
+      logger.info(`${this.processName} - Handover source drain completed. Exiting process.`);
+      this.exitSource(0);
+    } else {
+      // Do not log application error text: it may contain paths, topics or credentials.
+      logger.error(`${this.processName} - Handover source drain ${result}. Exiting with incomplete drain.`);
+      this.exitSource(1);
+    }
+  }
+
+  private async handleHandover(event: UnsEvents["input"]): Promise<void> {
+    try {
+      const response = JSON.parse(event.message.toString());
+      // Responder process
+      // Check if the message is a handover request and publish MULTIPLE handover_subscriber messages
+      if (response.type === "handover_request") {
+        const peerId = this.getSourceProcessId(event);
+        const replyTopic = event.packet?.properties?.responseTopic;
+        if (this.sourcePeerId || !this.active || !peerId || typeof replyTopic !== "string" || !replyTopic) return;
+        this.sourcePeerId = peerId;
+        this.acceptedHandoverId = this.getHandoverId(response, event);
+        this.handoverInProgress = true;
+        clearTimeout(this.activeTimeout);
+        this.activeTimeout = undefined;
+        this.sourcePreparation = this.prepareSourceHandover(response, event);
+        try {
+          await this.sourcePreparation;
+        } catch {
+          // Subscriber transfer or onRelease failed; never report successful source completion.
+          logger.error(`${this.processName} - Handover source preparation failed. Exiting with incomplete drain.`);
+          if (!this.sourceExit) this.exitSource(1);
+        }
       }
 
       // Requestor process
       // Check if the message is one of the handover_subscriber message in response to handover_request
       // and publish a handover_ack message
       if (response.type === "handover_subscriber") {
+        if (this.sourcePeerId) return;
         if (!this.acceptsHandoverResponse(this.getHandoverId(response, event))) return;
         // Find correct unsProxy instance for handover_subscriber and set it active
         this.unsMqttProxies.forEach((unsProxy: UnsMqttProxy) => {
@@ -321,6 +369,7 @@ export class HandoverManager {
       // Requestor process
       // Check if the message is a handover_fin at the end of handover_subscriber messages
       if (response.type === "handover_fin") {
+        if (this.sourcePeerId) return;
         const handoverId = this.getHandoverId(response, event);
         if (!this.acceptsHandoverResponse(handoverId)) return;
         logger.info(`${this.processName} - Received handover fin from ${event.packet?.properties?.userProperties?.processName}.`);
@@ -356,17 +405,15 @@ export class HandoverManager {
       // Responder process
       // Check if the message is a handover_ack at the end of handover_fin messages
       if (response.type === "handover_ack") {
+        if (!this.sourcePreparation || this.getSourceProcessId(event) !== this.sourcePeerId) return;
         const handoverId = this.getHandoverId(response, event);
         if (this.acceptedHandoverId && handoverId && this.acceptedHandoverId !== handoverId) {
           logger.warn(`${this.processName} - Ignoring acknowledgement for another migration.`);
           return;
         }
         logger.info(`${this.processName} - Received handover ack from ${event.packet?.properties?.userProperties?.processName}.`);
-        this.handoverInProgress = false;
-        this.requestingHandover = false;
-
-        logger.info(`${this.processName} - Handover completed. Exiting process.`);
-        process.exit(0);
+        this.sourceExit ??= this.finishSourceHandover();
+        await this.sourceExit;
       }
     } catch (error) {
       logger.error(`${this.processName} - Error processing handover response: ${error.message}`);

@@ -7,6 +7,7 @@ import { MqttTopicBuilder } from "../uns-mqtt/mqtt-topic-builder.js";
 import UnsMqttProxy from "../uns-mqtt/uns-mqtt-proxy.js";
 import type { UnsMqttProxyStopOptions } from "../uns-mqtt/uns-mqtt-proxy.js";
 import { HandoverManager } from "./handover-manager.js";
+import { validateHandoverShutdown, type HandoverShutdownHooks } from "./handover-shutdown.js";
 // Import configuration and initialization modules.
 import { MQTT_UPDATE_INTERVAL, PACKAGE_INFO } from "./process-config.js";
 import { type UnsServiceMetadata, type UnsServiceMetadataInput, buildUnsServiceMetadata } from "./service-metadata.js";
@@ -39,6 +40,7 @@ class UnsProxyProcess {
   private processName: string;
   private processId: string;
   private handoverId: string | undefined;
+  private handoverShutdown: HandoverShutdownHooks | undefined;
   private unsMqttProxies: UnsMqttProxy[];
   private unsApiProxies: unknown[];
   private processMqttProxy: MqttProxy;
@@ -103,6 +105,9 @@ class UnsProxyProcess {
     if (!unsProxyProcessParameters?.processName) {
       throw new Error("UnsProxyProcess requires a processName in configuration.");
     }
+    validateHandoverShutdown(unsProxyProcessParameters.handoverShutdown);
+    this.handoverShutdown = unsProxyProcessParameters.handoverShutdown
+      ? { ...unsProxyProcessParameters.handoverShutdown } : undefined;
     this.processName = unsProxyProcessParameters.processName;
     this.processId = randomBytes(16).toString("hex");
     this.handoverId = unsProxyProcessParameters.handoverId ?? process.env["UNS_HANDOVER_ID"];
@@ -183,6 +188,7 @@ class UnsProxyProcess {
       handover ?? true,
       forceStartEnabled,
       handoverId,
+      this.handoverShutdown,
     );
 
     // Listen for handover events.

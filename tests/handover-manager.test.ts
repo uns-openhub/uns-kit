@@ -18,6 +18,8 @@ const activeEvent = (retain: boolean) => ({
 
 describe("HandoverManager startup discovery", () => {
   afterEach(() => {
+    vi.clearAllTimers();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -88,6 +90,7 @@ describe("HandoverManager startup discovery", () => {
   });
 
   it("echoes a new request id from a newer target while retaining legacy source behavior", async () => {
+    vi.useFakeTimers();
     const publish = vi.fn(async () => undefined);
     const proxy = {
       instanceName: "input",
@@ -98,9 +101,12 @@ describe("HandoverManager startup discovery", () => {
         referenceHash: "abc",
       })),
       stop: vi.fn(async () => undefined),
+      setPublisherActive: vi.fn(),
+      setSubscriberActive: vi.fn(),
     };
     const manager = new HandoverManager("uns-archiver", "old-source", { publish } as any, [proxy] as any, false, true, false);
     const handoverTopic = ownHandoverTopic("uns-archiver");
+    await vi.advanceTimersByTimeAsync(ACTIVE_TIMEOUT);
 
     await manager.handleMqttMessage({
       topic: handoverTopic,
@@ -132,6 +138,7 @@ describe("HandoverManager startup discovery", () => {
   });
 
   it("accepts legacy source completion and emits a correlated acknowledgement", async () => {
+    vi.useFakeTimers();
     const publish = vi.fn(async () => undefined);
     const proxy = { setPublisherActive: vi.fn(), setSubscriberActive: vi.fn() };
     const manager = new HandoverManager("uns-archiver", "new-target", { publish } as any, [proxy] as any, true, true, false, "migration-123");

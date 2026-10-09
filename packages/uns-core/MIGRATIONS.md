@@ -9,6 +9,33 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.23 - Application drain on handover
+
+Applications upgrading from `<3.0.23` to `>=3.0.23` may register
+`handoverShutdown: { onRelease, drain, timeoutMs }` in `UnsProxyProcess`
+construction, before creating MQTT proxies. `onRelease` runs synchronously when
+an active source accepts a handover: stop admitting new background work, but
+continue handling already accepted MQTT input while subscriber queues drain.
+`drain` runs after the target's acknowledgement and source proxy stops. Await
+accepted application writes, durable spills and replay checkpoints, then close
+writers. Do not call `process.exit` inside either hook. Share an idempotent drain
+with SIGINT/SIGTERM cleanup; signal cleanup remains application-owned.
+
+The source exits with status 0 only when its remaining proxy stops and drain
+finish. A rejected hook or deadline exits with status 1 and a generic diagnostic,
+without logging hook error text. The default deadline after acknowledgement is
+30 seconds; a registered timeout may be 1 to 300000 ms. Timeout does not cancel
+IO or guarantee all writes were saved. Persist recoverable work before relying
+on this hook and review pending files after an incomplete drain.
+
+Duplicate acknowledgements share one drain. Unsolicited acknowledgements and
+acknowledgements from a different peer do not exit the process. MQTT wire
+messages are unchanged, so an old source still uses its old immediate exit:
+upgrading only the target cannot retrofit the source hook. `handover_fin` and
+`handover_ack` confirm MQTT ownership transfer, not application drain or a safe
+legacy-directory import. Wait for source process exit separately. This change
+does not add exactly-once semantics or controller fencing.
+
 ## 3.0.22 - Safe API request correlation
 
 When upgrading `@uns-kit/api` from `<3.0.22` to `>=3.0.22`, its generic request

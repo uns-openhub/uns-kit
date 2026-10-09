@@ -1,3 +1,4 @@
+import type { HandoverShutdownHooks } from "./handover-shutdown.js";
 import { UnsAttributeType } from "../graphql/schema.js";
 import { MeasurementUnit } from "./uns-measurements.js";
 import { UnsTags } from "./uns-tags.js";
@@ -144,6 +145,8 @@ export interface IUnsParameters {
 }
 
 export interface IUnsProcessParameters {
+  /** Optional application drain after a cooperative handover. Register before creating proxies. */
+  handoverShutdown?: HandoverShutdownHooks;
   processName: string;
   /**
    * Optional controller-supplied correlation id for one cooperative handover.
