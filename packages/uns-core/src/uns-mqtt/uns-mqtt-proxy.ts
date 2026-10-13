@@ -528,23 +528,34 @@ export default class UnsMqttProxy extends UnsProxy {
           break;
         }
         case MessageMode.Delta: {
-          const deltaMessage = { ...mqttMessageWithDesc };
-          deltaMessage.attribute = `${mqttMessageWithDesc.attribute}-delta`;
-          deltaMessage.description = `${baseDescription ?? ""} (delta)`;
+          const deltaMessage = this.buildGeneratedDeltaMessage(mqttMessageWithDesc);
           await this.processAndEnqueueMessage(deltaMessage, time, true);
           break;
         }
         case MessageMode.Both: {
           await this.processAndEnqueueMessage(mqttMessageWithDesc, time, false);
-          const deltaMessageBoth = { ...mqttMessageWithDesc };
-          deltaMessageBoth.attribute = `${mqttMessageWithDesc.attribute}-delta`;
-          deltaMessageBoth.description = `${baseDescription ?? ""} (delta)`;
+          const deltaMessageBoth = this.buildGeneratedDeltaMessage(mqttMessageWithDesc);
           await this.processAndEnqueueMessage(deltaMessageBoth, time, true);
           break;
         }
       }
     }
     return;
+  }
+
+  private buildGeneratedDeltaMessage(message: InternalMqttMessage): InternalMqttMessage {
+    return {
+      ...message,
+      attribute: `${message.attribute}-delta`,
+      description: `${message.description ?? ""} (delta)`,
+      // A calculated numeric increment is already a delta. Counter metadata
+      // would ask history consumers to difference it a second time.
+      ...(typeof message.packet.message.data?.value === "number" ? {
+        presentationKind: "delta",
+        defaultAggregation: "sum",
+        counterResetPolicy: undefined,
+      } : {}),
+    };
   }
 
   private warnDeprecatedDeltaMode(mode: MessageMode): void {

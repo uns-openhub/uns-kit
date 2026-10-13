@@ -9,6 +9,28 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.24 - Generated numeric delta metadata
+
+When upgrading from `<3.0.24` to `>=3.0.24`, numeric scalar publications in
+the deprecated `MessageMode.Delta` and `MessageMode.Both` modes declare
+`presentationKind: "delta"` and `defaultAggregation: "sum"` on the generated
+`-delta` attribute. They no longer inherit cumulative-counter presentation,
+last aggregation or a counter reset-policy hint. The original raw attribute
+keeps its caller-supplied metadata. Paths, packet values, timestamps, units,
+persistence, freshness and the existing difference/reset calculation remain
+unchanged. Non-numeric and table publication metadata are unchanged.
+
+Review existing canonical schema definitions for generated delta attributes:
+controllers may keep previously stored non-null shape fields after an upgrade.
+Correct reviewed definitions to interval/delta semantics and request raw
+history with sum aggregation for interval amounts. Do not difference already
+calculated deltas. Do not globally label unsuffixed attributes as counters
+from their names: other publishers can reuse a name for interval amounts.
+
+These legacy producer delta modes still lose previous-value state on restart.
+Preserve consumers while migrating toward raw cumulative counters and history
+API delta/rate transforms; this metadata fix does not make delta state durable.
+
 ## 3.0.23 - Application drain on handover
 
 Applications upgrading from `<3.0.23` to `>=3.0.23` may register

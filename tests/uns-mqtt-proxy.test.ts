@@ -47,7 +47,8 @@ vi.mock("worker_threads", () => ({
   Worker: FakeWorker,
 }));
 
-import UnsMqttProxy from "../packages/uns-core/src/uns-mqtt/uns-mqtt-proxy.js";
+import UnsMqttProxy, { MessageMode } from "../packages/uns-core/src/uns-mqtt/uns-mqtt-proxy.js";
+import type { IMqttAttributeMessage, IMqttPublishRequest, ITopicObject } from "../packages/uns-core/src/uns/uns-interfaces.js";
 
 const getLastWorker = (): InstanceType<typeof FakeWorker> => {
   const worker = FakeWorker.instances.at(-1);
@@ -246,5 +247,95 @@ describe("UnsMqttProxy publish drain contract", () => {
 
     await expect(proxy.setSubscriberPassiveAndDrainQueue()).rejects.toThrow("handover drain failed");
     await proxy.stop({ drain: false });
+  });
+});
+
+describe("generated numeric delta semantics", () => {
+  beforeEach(() => { FakeWorker.instances.length = 0; });
+
+  const setup = () => {
+    const proxy = new UnsMqttProxy("localhost", "delta-test", "output");
+    const worker = getLastWorker();
+    const originalPost = worker.postMessage.bind(worker);
+    worker.postMessage = message => {
+      originalPost(message);
+      if (message.command === "enqueue") queueMicrotask(() => {
+        worker.emit("message", { command: "enqueueAccepted", id: message.id, status: "accepted" });
+        worker.emit("message", { command: "publishResult", id: message.id, status: "success" });
+      });
+    };
+    let metadata: ITopicObject[] = [];
+    proxy.event.on("unsProxyProducedTopics", event => { metadata = event.producedTopics; });
+    return {
+      proxy,
+      metadata: () => metadata,
+      packets: () => worker.postedMessages.filter(m => m.command === "enqueue").map(m => ({ topic: m.topic, packet: JSON.parse(m.message) })),
+    };
+  };
+
+  const reading = (value: number | string, seconds = 0): IMqttPublishRequest & { attributes: IMqttAttributeMessage[] } => ({
+    topic: "plant/site/", asset: "meter", objectType: "energy-meter", objectId: "main",
+    attributes: [{
+      attribute: "energy-total", attributeNeedsPersistence: true,
+      valueType: typeof value === "number" ? "number" : "string",
+      presentationKind: "counter", defaultAggregation: "last", counterResetPolicy: "new-value",
+      validityMode: "interval", expectedIntervalMs: 60000,
+      data: { time: new Date(Date.UTC(2026, 9, 13, 0, 0, seconds)).toISOString(), value, uom: "kWh", dataGroup: "meters" },
+    }],
+  });
+
+  it.each([MessageMode.Both, MessageMode.Delta])("separates delta metadata and preserves calculated values in %s mode", async mode => {
+    const test = setup();
+    try {
+      await test.proxy.publishMqttMessage(reading(100), mode);
+      await test.proxy.publishMqttMessage(reading(117, 5), mode);
+      const delta = test.metadata().find(m => m.attribute === "energy-total-delta");
+      expect(delta).toMatchObject({ presentationKind: "delta", defaultAggregation: "sum", valueType: "number", attributeNeedsPersistence: true, validityMode: "interval", expectedIntervalMs: 60000, dataGroup: "meters" });
+      expect(delta).not.toHaveProperty("counterResetPolicy");
+      const packets = test.packets();
+      const values = packets.filter(p => p.topic.endsWith("-delta")).map(p => p.packet.message.data.value);
+      expect(values).toEqual([17]);
+      const packet = packets.find(p => p.topic.endsWith("-delta"))!.packet;
+      expect(packet.message.data).toMatchObject({ time: "2026-10-13T00:00:05.000Z", value: 17, uom: "kWh", dataGroup: "meters" });
+      expect(packet.interval).toBe(5000);
+      if (mode === MessageMode.Both) {
+        expect(test.metadata().find(m => m.attribute === "energy-total")).toMatchObject({ presentationKind: "counter", defaultAggregation: "last", counterResetPolicy: "new-value" });
+        expect(packets.filter(p => !p.topic.endsWith("-delta")).map(p => p.packet.message.data.value)).toEqual([100, 117]);
+      } else {
+        expect(test.metadata()).toHaveLength(1);
+      }
+    } finally { await test.proxy.stop({ drain: false }); }
+  });
+
+  it("preserves zero increments, legacy zero-reading suppression and resets", async () => {
+    const test = setup();
+    try {
+      for (const [i, value] of [100, 100, 0, 7, 3].entries()) {
+        await test.proxy.publishMqttMessage(reading(value, i * 5), MessageMode.Both);
+      }
+      expect(test.packets().filter(p => p.topic.endsWith("-delta")).map(p => p.packet.message.data.value)).toEqual([0, 7, 3]);
+      expect(test.packets().filter(p => !p.topic.endsWith("-delta")).map(p => p.packet.message.data.value)).toEqual([100, 100, 0, 7, 3]);
+    } finally { await test.proxy.stop({ drain: false }); }
+  });
+
+  it("does not change a raw interval publication or invent a delta path", async () => {
+    const test = setup();
+    try {
+      const interval = reading(13);
+      interval.attributes[0]!.presentationKind = "chart";
+      interval.attributes[0]!.defaultAggregation = "sum";
+      await test.proxy.publishMqttMessage(interval, MessageMode.Raw);
+      expect(test.metadata()).toHaveLength(1);
+      expect(test.metadata()[0]).toMatchObject({ presentationKind: "chart", defaultAggregation: "sum" });
+      expect(test.packets()[0]!.packet.message.data.value).toBe(13);
+    } finally { await test.proxy.stop({ drain: false }); }
+  });
+
+  it("does not impose sum/delta presentation on non-numeric data", async () => {
+    const test = setup();
+    try {
+      await test.proxy.publishMqttMessage(reading("ready"), MessageMode.Both);
+      expect(test.metadata().find(m => m.attribute === "energy-total-delta")).toMatchObject({ valueType: "string", presentationKind: "counter", defaultAggregation: "last" });
+    } finally { await test.proxy.stop({ drain: false }); }
   });
 });
