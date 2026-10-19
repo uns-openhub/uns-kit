@@ -1,3 +1,4 @@
+import { SubscriptionReadiness } from "./subscription-readiness.js";
 import mqtt, { IClientOptions, MqttClient } from "mqtt";
 import logger from "../logger.js";
 import { UnsEvents } from "../uns/uns-interfaces.js";
@@ -34,6 +35,8 @@ export default class MqttProxy {
   private subscribedMessageBytes = 0;
   private mqttWorker: MqttWorker;
   public isConnected = false;
+  private subscriptionReadiness = new SubscriptionReadiness();
+  private lastSubscriptionReady: boolean | null = null;
   private rejectUnauthorized: boolean;
   private pendingReconnectWait: Promise<void> | null = null;
   private hasEstablishedConnection = false;
@@ -85,6 +88,14 @@ export default class MqttProxy {
         this.emitTransformationStatistics();
       }, 60000);
     }
+  }
+
+  private emitSubscriptionReadiness(force = false): void {
+    const ready = this.subscriptionReadiness.ready();
+    if (!force && ready === this.lastSubscriptionReady) return;
+    this.lastSubscriptionReady = ready;
+    this.event.emit("mqttProxyStatus", {event: "mqtt-subscriptions-ready", value: ready ? 1 : 0,
+      uom: DataSizeMeasurements.Bit, statusTopic: this.statusTopic + "mqtt-subscriptions-ready"});
   }
 
   private subscribeToTopics(): void {
@@ -192,6 +203,14 @@ export default class MqttProxy {
         const onConnect = () => this.handleMqttConnect();
 
         this.mqttClient.on("connect", onConnect);
+        this.mqttClient.on("packetsend", packet => {
+          this.subscriptionReadiness.sent(packet as Parameters<SubscriptionReadiness["sent"]>[0]);
+          this.emitSubscriptionReadiness();
+        });
+        this.mqttClient.on("packetreceive", packet => {
+          this.subscriptionReadiness.received(packet as Parameters<SubscriptionReadiness["received"]>[0]);
+          this.emitSubscriptionReadiness();
+        });
 
         this.mqttClient.on("message", (topic: string, message: Buffer, packet: mqtt.IPublishPacket) => {
           try {
@@ -211,6 +230,8 @@ export default class MqttProxy {
           const errorInfo = formatMqttError(error);
           logger.error(`${this.instanceName} - MQTT client error: ${errorInfo.message}`);
           this.isConnected = false;
+          this.subscriptionReadiness.connection(false);
+          this.emitSubscriptionReadiness();
           this.event.emit("error", {
             code: typeof errorInfo.code === "number" ? errorInfo.code : 0,
             message: errorInfo.message,
@@ -225,25 +246,35 @@ export default class MqttProxy {
         this.mqttClient.on("close", () => {
           logger.debug(`${this.instanceName} - MQTT connection closed.`);
           this.isConnected = false;
+          this.subscriptionReadiness.connection(false);
+          this.emitSubscriptionReadiness();
         });
 
         this.mqttClient.on("offline", () => {
           logger.debug(`${this.instanceName} - MQTT client is offline.`);
           this.isConnected = false;
+          this.subscriptionReadiness.connection(false);
+          this.emitSubscriptionReadiness();
         });
 
         this.mqttClient.on("end", () => {
           logger.debug(`${this.instanceName} - MQTT client connection ended.`);
           this.isConnected = false;
+          this.subscriptionReadiness.connection(false);
+          this.emitSubscriptionReadiness();
         });
 
         this.mqttClient.on("disconnect", (packet) => {
           logger.debug(`${this.instanceName} - MQTT client disconnected. Reason: ${packet?.reasonCode}`);
           this.isConnected = false;
+          this.subscriptionReadiness.connection(false);
+          this.emitSubscriptionReadiness();
         });
       } catch (error) {
         logger.error(`${this.instanceName} - Error starting MQTT proxy: ${formatMqttError(error).message}`);
         this.isConnected = false;
+        this.subscriptionReadiness.connection(false);
+        this.emitSubscriptionReadiness();
         reject(error);
       }
     });
@@ -301,6 +332,8 @@ export default class MqttProxy {
     return new Promise((resolve, reject) => {
       const resetState = () => {
         this.isConnected = false;
+        this.subscriptionReadiness.connection(false);
+        this.emitSubscriptionReadiness();
         this.pendingReconnectWait = null;
         this.startupSettled = false;
         this.hasEstablishedConnection = false;
@@ -353,6 +386,8 @@ export default class MqttProxy {
       this.startupSettled = true;
       this.hasEstablishedConnection = true;
       this.isConnected = true;
+      this.subscriptionReadiness.connection(true);
+      this.emitSubscriptionReadiness();
 
       if (isFirstConnect) {
         logger.info(`${this.instanceName} - Connected to MQTT broker at ${this.mqttHost}`);
@@ -372,12 +407,15 @@ export default class MqttProxy {
     } catch (error) {
       logger.error(`${this.instanceName} - Error in MQTT connect handler: ${formatMqttError(error).message}`);
       this.isConnected = false;
+      this.subscriptionReadiness.connection(false);
+      this.emitSubscriptionReadiness();
       reject(error);
     }
   }
 
   private emitStatusUpdates() {
     try {
+      this.emitSubscriptionReadiness(true);
       const uptime = Math.round((new Date().getTime() - this.startDate.getTime()) / 60000);
       this.event.emit("mqttProxyStatus", { event: "uptime", value: uptime, uom: PhysicalMeasurements.Minute, statusTopic: this.statusTopic + "uptime" });
       this.event.emit("mqttProxyStatus", { event: "alive", value: 1, uom: DataSizeMeasurements.Bit, statusTopic: this.statusTopic + "alive" });

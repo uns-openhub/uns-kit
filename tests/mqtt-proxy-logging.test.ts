@@ -167,3 +167,16 @@ describe("formatMqttError", () => {
     expect(formatMqttError(undefined).message).toBe("Unknown MQTT error");
   });
 });
+
+it("forwards broker ACK readiness, heartbeat and disconnect through the existing event", async () => {
+  vi.useFakeTimers();
+  const client = new FakeMqttClient();connectMock.mockReturnValue(client);
+  const proxy = new MqttProxy("127.0.0.1", "input", {statusTopic:"test/",mqttSubToTopics:["a/#"]});
+  const statuses:number[]=[];proxy.event.on("mqttProxyStatus",event=>{if(event.event==="mqtt-subscriptions-ready")statuses.push(event.value)});
+  const started=proxy.start();client.connected=true;client.emit("connect");await started;
+  client.emit("packetsend",{cmd:"subscribe",messageId:1,subscriptions:[{topic:"a/#"}]});
+  expect(statuses.at(-1)).toBe(0);
+  client.emit("packetreceive",{cmd:"suback",messageId:1,granted:[0]});expect(statuses.at(-1)).toBe(1);
+  const count=statuses.length;await vi.advanceTimersByTimeAsync(10000);expect(statuses.length).toBeGreaterThan(count);expect(statuses.at(-1)).toBe(1);
+  client.emit("close");expect(statuses.at(-1)).toBe(0);await proxy.stop();vi.useRealTimers();
+});

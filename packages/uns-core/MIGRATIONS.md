@@ -9,6 +9,22 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.26 - Broker-acknowledged input subscriptions
+
+When upgrading from `<3.0.26` to `>=3.0.26`, `mqttProxyStatus` includes the additive
+numeric event `mqtt-subscriptions-ready`: 1 only when the current connection has
+acknowledged every observed subscription and no subscribe/unsubscribe ACK remains
+pending; 0 on pending/rejected subscriptions or connection loss. The normal ten
+second status heartbeat repeats the observation. No topics, credentials or payloads
+are included, and no extra subscriptions or data publications are created.
+
+Applications may observe this event on an `UnsMqttProxy` to distinguish process
+Start/connect from prepared broker input. Also verify that application handlers,
+registry and admission policy are prepared. Expire old observations and invalidate
+them during pause/shutdown/restart. This transport observation does not guarantee
+application persistence, a database ACK, replica visibility or exactly-once delivery.
+Existing consumers need no change; old SDKs provide no such confirmation.
+
 ## 3.0.24 - Generated numeric delta metadata
 
 When upgrading from `<3.0.24` to `>=3.0.24`, numeric scalar publications in
