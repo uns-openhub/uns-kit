@@ -44,3 +44,4 @@ jobs:
       - run: pnpm run ts:build
       - run: pnpm run ts:pack:check
       - run: pnpm exec vitest run tests/api-package-boundary.test.ts
+      - run: pnpm exec vitest run tests/subscription-readiness.test.ts tests/mqtt-proxy-logging.test.ts tests/mqtt-worker.test.ts tests/uns-mqtt-proxy.test.ts
