@@ -28,3 +28,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run ts:version:check
       - run: pnpm --filter @uns-kit/assistant-workflow run verify
+
+  verify-package-artifacts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run ts:version:check
+      - run: pnpm run ts:build
+      - run: pnpm run ts:pack:check
+      - run: pnpm exec vitest run tests/api-package-boundary.test.ts

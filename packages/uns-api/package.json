@@ -1,6 +1,6 @@
 {
   "name": "@uns-kit/api",
-  "version": "3.0.24",
+  "version": "3.0.25",
   "description": "Express-powered API gateway plugin for UnsProxyProcess with JWT/JWKS support.",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "postversion": "node ../../scripts/update-cli-package-version.cjs"
+    "postversion": "node ../../scripts/update-cli-package-version.cjs",
+    "prepack": "pnpm --filter @uns-kit/core run build && pnpm run build && node ../../scripts/check-package-artifacts.cjs ."
   },
   "dependencies": {
     "@uns-kit/core": "workspace:*",

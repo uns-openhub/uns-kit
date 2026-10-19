@@ -55,7 +55,8 @@ named objects, see
 |---|---|
 | `ts:version:patch` | Bump patch version for all `@uns-kit/*` packages |
 | `ts:build` | Build all TypeScript packages |
-| `ts:publish` | Publish all `@uns-kit/*` packages |
+| `ts:pack:check` | Verify packed entry points for every TypeScript package |
+| `ts:publish` | Build, verify packed entry points, then publish all `@uns-kit/*` packages |
 | `ts:sandbox:*` | Run sandbox examples (`data`, `load-test`, `table`, `api`, `cron`, `uns-gateway-cli`) |
 | `ts:configure:*` | Run CLI configure commands against `sandbox-app` |
 | `ts:core:sync-uns-schema` | Pull canonical UNS schema from controller, update repo templates and regenerate dictionary/measurement TS |

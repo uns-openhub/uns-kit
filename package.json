@@ -24,7 +24,7 @@
     "ts:version:patch": "pnpm -r --workspace-concurrency=1 --filter \"@uns-kit/*\" exec pnpm version patch --no-git-tag-version && pnpm run ts:version:check",
     "ts:version:check": "node ./scripts/check-cli-package-versions.cjs",
     "ts:build": "pnpm -r --filter \"@uns-kit/*\" run build",
-    "ts:publish": "pnpm -r --filter \"@uns-kit/*\" publish --access public",
+    "ts:publish": "pnpm run ts:build && pnpm run ts:pack:check && pnpm -r --filter \"@uns-kit/*\" publish --access public",
     "ts:assistant-workflow:build": "pnpm --filter @uns-kit/assistant-workflow run build",
     "ts:assistant-workflow:publish": "pnpm --filter @uns-kit/assistant-workflow publish --access public",
     "ts:sandbox:create": "pnpm exec tsx packages/uns-cli/src/index.ts create sandbox-app",
@@ -45,7 +45,8 @@
     "ts:configure:uns-reference": "pnpm exec tsx packages/uns-cli/src/index.ts configure-uns-reference sandbox-app",
     "ts:core:pull-request": "pnpm --filter @uns-kit/core build && pnpm exec tsx packages/uns-core/src/tools/pull-request.ts",
     "ts:core:sync-uns-metadata": "pnpm --filter @uns-kit/core build && pnpm exec tsx packages/uns-core/src/tools/sync-uns-metadata.ts",
-    "ts:core:sync-uns-schema": "pnpm exec tsx packages/uns-core/src/tools/sync-uns-schema.ts"
+    "ts:core:sync-uns-schema": "pnpm exec tsx packages/uns-core/src/tools/sync-uns-schema.ts",
+    "ts:pack:check": "node ./scripts/check-package-artifacts.cjs"
   },
   "author": "Aljosa Vister",
   "license": "MIT",
