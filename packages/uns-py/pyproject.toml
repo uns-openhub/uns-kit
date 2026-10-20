@@ -18,7 +18,7 @@ uvicorn = { version = "^0.35.0", optional = true }
 apscheduler = { version = "^3.11.0", optional = true }
 pyjwt = { version = "^2.13.0", extras = ["crypto"], optional = true }
 psycopg = { version = "^3.2.9", extras = ["binary"], optional = true }
-oracledb = { version = "^2.5.1", optional = true }
+oracledb = { version = ">=2.5.1,<5.0.0", optional = true }
 pandas = { version = "^2.3.3", optional = true }
 pyarrow = { version = "^21.0.0", optional = true }
 
