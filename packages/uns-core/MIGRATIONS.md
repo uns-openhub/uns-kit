@@ -419,3 +419,38 @@ For every affected application, verify all of the following:
 - Confirm producers handle queue-full rejection at their required reliability
   level.
 - Test that shutdown waits for accepted publishes and does not accept new work.
+
+## 3.0.27 - Shared process-group runtime protocol 1
+
+When crossing `<3.0.27` to `>=3.0.27`, existing applications need no change unless
+using reviewed multi-process consolidation. Such applications and host launchers
+must consume the shared `runtime/process-group-*.js` modules rather than fork
+policy verification, configuration projection, journal identity or supervision.
+Declare a data-only `unsDatahub.processGroupRuntime` in the application package.
+See `docs/process-group-runtime.md` in the SDK repository for its schema and limits.
+A declaration advertises support; it grants no execution or data access rights.
+
+Host launchers still own authenticated commands, durable operation state, process
+identity and resource limits. Applications own input parsing, mappings, units,
+publishing and the SQLite writer. Both must implement protocol 1 exactly. The
+SDK supplies the manifest, authorization, journal contract, staging, inspection,
+receiver supervision and standalone snapshot reader. Do not import or execute an
+application module inside the Controller. Do not add package/group-specific branches
+or release-time group enumerations to a host launcher.
+
+New authorizations use policy schema 3 and pin the declared descriptor, installed
+artifact, manifest, mappings, three MQTT channel identities, configurations,
+controller, placements, journal and state mount. Policies 1/2 remain frozen readers
+for previously issued artifacts; do not relabel them as schema 3 or widen their
+scope. Adding a group requires a new reviewed manifest/policy, not a Controller
+capability number. Unknown protocols, changed resources, missing retained-state
+policies and uncertain operation results remain blocked pending review.
+
+Protocol 1 supports same-package, same-controller MQTT source groups (2–16
+publishers), one target and one separately supervised receiver, with the existing
+bounded SQLite journal format on a local Linux filesystem mount. It is not an
+arbitrary transport, cross-host queue transfer or exactly-once protocol. Durable
+admission starts only after the receiver subscription is acknowledged; a broker
+or pre-admission gap can still lose input. Configuration-defined secrets remain
+in the application; authorization diagnostics and backup outer metadata omit them.
+Existing journal payloads and checkpoints are not converted by this upgrade.
