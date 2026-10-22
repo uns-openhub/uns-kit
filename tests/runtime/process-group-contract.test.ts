@@ -319,6 +319,18 @@ describe("shared process-group contract", () => {
       f.close();
     }
   });
+  it("keeps ordinary packages independent of journal path rules while rejecting linked group resources", () => {
+    const f = fixture();
+    try {
+      const alias = path.join(f.root, "linked-package");
+      fs.symlinkSync(f.pkg, alias);
+      expect(() => processGroupDescriptor(alias)).toThrow(/links/);
+      f.write(path.join(f.pkg, "package.json"), { name: "ordinary-python-runtime", version: "1.0.0" });
+      expect(processGroupDescriptor(alias)).toBeUndefined();
+    } finally {
+      f.close();
+    }
+  });
   it("requires the reviewed state mount during inspection before opening journal data", () => {
     const f = fixture(),
       old = { ...process.env };

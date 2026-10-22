@@ -62,12 +62,28 @@ export function readConfigurationSelector(raw: unknown, keys: readonly string[])
 export function processGroupDescriptor(packageRoot: string): ProcessGroupRuntimeDescriptor | undefined {
   const file = path.join(packageRoot, "package.json");
   if (!fs.existsSync(file)) return undefined;
-  const pkg = JSON.parse(readProcessGroupResource(file).toString());
+  // Discovery must not impose journal path rules on unrelated Node/Python packages.
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  let bytes: Buffer;
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.size > 1024 * 1024) throw Error("Invalid installed runtime metadata");
+    bytes = fs.readFileSync(fd);
+    if (bytes.length > 1024 * 1024) throw Error("Installed runtime metadata is too large");
+  } finally {
+    fs.closeSync(fd);
+  }
+  const pkg = JSON.parse(bytes.toString());
   const declared = pkg.unsDatahub?.processGroupRuntime;
-  if (declared !== undefined) return processGroupRuntimeDescriptorSchema.parse(declared);
-  // Frozen bridge for issued capability1/2/3 artifacts; never add future groups here.
-  if ([1, 2, 3].includes(pkg.unsDatahub?.processGroupProductionAuthorization)) return legacyDescriptorForPackage(String(pkg.name));
-  return undefined;
+  const descriptor =
+    declared !== undefined
+      ? processGroupRuntimeDescriptorSchema.parse(declared)
+      : [1, 2, 3].includes(pkg.unsDatahub?.processGroupProductionAuthorization)
+        ? legacyDescriptorForPackage(String(pkg.name))
+        : undefined;
+  // Opted-in groups still require canonical, unchanged, unlinked installed resources.
+  if (descriptor && !readProcessGroupResource(file).equals(bytes)) throw Error("Installed runtime metadata changed during discovery");
+  return descriptor;
 }
 export function normalizeProcessGroupConfiguration(raw: Record<string, unknown>, d: ProcessGroupRuntimeDescriptor) {
   const publisher = readConfigurationSelector(raw, d.publisherPath) as Record<string, unknown> | undefined;
