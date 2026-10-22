@@ -87,6 +87,9 @@ function privateDirectory(dir: string): void {
   if (!s.isDirectory() || s.uid !== process.getuid?.() || (s.mode & 0o077) !== 0) throw Error("Insecure policy directory");
 }
 function registryRoot(root: string, dir: string): string {
+  if (!path.isAbsolute(root) || path.resolve(root) !== root || path.resolve(dir) !== dir) throw Error("Invalid policy registry");
+  privateDirectory(root);
+  if (dir === root) return "*"; // Explicit collection of independently owned namespaces.
   const relative = path.relative(root, dir);
   if (!path.isAbsolute(root) || path.resolve(root) !== root || !/^([a-z][a-z0-9-]{0,99})\/authorizations$/.test(relative))
     throw Error("Invalid policy registry");
@@ -104,8 +107,11 @@ function selectedFile(pkg: string, raw: Record<string, unknown>, root: string, e
   const dir = process.env["UNS_PROCESS_GROUP_AUTHORIZATION_DIRECTORY"];
   if (explicit) return explicit;
   if (dir) {
-    if (registryRoot(root, dir) !== descriptor.namespace) throw Error("Foreign runtime registry");
-    return path.join(dir, manifest.id + ".json");
+    const selected = registryRoot(root, dir);
+    if (selected !== "*" && selected !== descriptor.namespace) throw Error("Foreign runtime registry");
+    const registry = selected === "*" ? path.join(root, descriptor.namespace, "authorizations") : dir;
+    privateDirectory(registry);
+    return path.join(registry, manifest.id + ".json");
   }
   const single = process.env["UNS_PROCESS_GROUP_AUTHORIZATION_FILE"];
   if (!single) throw Error("No selected policy");
@@ -124,25 +130,52 @@ export function configuredGroupProcessNames(): Set<string> {
     if (single) files.add(single);
     const dir = process.env["UNS_PROCESS_GROUP_AUTHORIZATION_DIRECTORY"];
     if (dir) {
-      const namespace = registryRoot(root, dir);
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      if (entries.length > 64) throw Error("Policy registry budget exceeded");
-      for (const entry of entries) {
-        if (entry.name.endsWith(".json")) {
-          if (!/^[a-z][a-z0-9-]{0,99}\.json$/.test(entry.name)) throw Error();
-          files.add(path.join(dir, entry.name));
+      const selected = registryRoot(root, dir);
+      let registries: { namespace: string; directory: string }[];
+      if (selected === "*") {
+        const namespaces = fs.readdirSync(root, { withFileTypes: true });
+        if (namespaces.length > 64 || namespaces.some((e) => e.isSymbolicLink())) throw Error("Registry namespace budget or link violation");
+        registries = namespaces
+          .filter((e) => e.isDirectory())
+          .map((e) => {
+            if (!id.safeParse(e.name).success) throw Error("Invalid registry namespace");
+            privateDirectory(path.join(root, e.name));
+            return { namespace: e.name, directory: path.join(root, e.name, "authorizations") };
+          });
+      } else registries = [{ namespace: selected, directory: dir }];
+      for (const registry of registries) {
+        let entries: fs.Dirent[] = [];
+        try {
+          privateDirectory(registry.directory);
+          entries = fs.readdirSync(registry.directory, { withFileTypes: true });
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
         }
-      }
-      const journals = path.join(root, namespace, "admission");
-      try {
-        const retained = fs.readdirSync(journals, { withFileTypes: true });
-        if (retained.length > 64) throw Error();
-        for (const entry of retained) {
-          if (!id.safeParse(entry.name).success || !files.has(path.join(dir, entry.name + ".json")))
-            throw Error("Retained journal has no reviewed policy");
+        if (entries.length > 64) throw Error("Policy registry budget exceeded");
+        for (const entry of entries)
+          if (entry.name.endsWith(".json")) {
+            if (!/^[a-z][a-z0-9-]{0,99}\.json$/.test(entry.name)) throw Error("Invalid registry entry");
+            files.add(path.join(registry.directory, entry.name));
+            if (files.size > 64) throw Error("Total policy registry budget exceeded");
+          }
+        const journals = path.join(root, registry.namespace, "admission");
+        try {
+          // Root/registry permissions already protect visibility; retain old parent modes.
+          for (let parent = journals; parent !== path.dirname(parent); parent = path.dirname(parent))
+            if (fs.lstatSync(parent).isSymbolicLink()) throw Error("Linked journal registry");
+          const retained = fs.readdirSync(journals, { withFileTypes: true });
+          if (retained.length > 64) throw Error("Retained journal budget exceeded");
+          for (const entry of retained)
+            if (
+              !id.safeParse(entry.name).success ||
+              entry.isSymbolicLink() ||
+              !entry.isDirectory() ||
+              !files.has(path.join(registry.directory, entry.name + ".json"))
+            )
+              throw Error("Retained journal has no reviewed policy");
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
         }
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
       }
     }
     const result = new Set<string>();
@@ -152,8 +185,7 @@ export function configuredGroupProcessNames(): Set<string> {
         raw.schemaVersion === 3
           ? processGroupAuthorizationSchema.parse(raw)
           : z.union([legacy.hvAuthorizationSchema, legacy.processGroupAuthorizationSchema]).parse(raw);
-      const namespace = p.schemaVersion === 3 ? p.namespace : "energenti",
-        group = p.schemaVersion === 1 ? "hv" : p.groupId;
+      const { namespace, group } = p.schemaVersion === 3 ? { namespace: p.namespace, group: p.groupId } : legacy.legacyPolicyIdentity(p);
       if (
         p.stateRoot !== root ||
         file !== path.join(root, namespace, "authorizations", group + ".json") ||

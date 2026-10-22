@@ -345,3 +345,8 @@ export function assertHvTargetLaunch(
     throw Error(`${value.groupId.toUpperCase()} target requires its exact reviewed group reservation and launch identity`);
   }
 }
+
+/** Historical policy identity; never use this bridge for new runtime declarations. */
+export function legacyPolicyIdentity(policy: HvAuthorizationPolicy | ProcessGroupAuthorizationPolicy) {
+  return { namespace: "energenti", group: policy.schemaVersion === 1 ? "hv" : policy.groupId };
+}

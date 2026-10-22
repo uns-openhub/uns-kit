@@ -279,6 +279,65 @@ describe("shared process-group contract", () => {
       a.close();
     }
   });
+  it("selects separate namespaces for unrelated applications in an explicit registry collection", () => {
+    const a = fixture("temperature-cell", "temperature-pipeline"),
+      b = fixture("inspection-cell", "quality-pipeline"),
+      old = { ...process.env };
+    try {
+      const namespace = "quality",
+        directory = path.join(a.state, namespace, "admission/inspection-cell"),
+        registry = path.join(a.state, namespace, "authorizations"),
+        file = path.join(registry, "inspection-cell.json");
+      fs.mkdirSync(registry, { recursive: true, mode: 0o700 });
+      b.metadata.unsDatahub.processGroupRuntime.namespace = namespace;
+      b.write(path.join(b.pkg, "package.json"), b.metadata);
+      b.policy.namespace = namespace;
+      b.policy.stateRoot = a.state;
+      b.policy.directory = directory;
+      b.policy.descriptorSha256 = api.configurationAuthorizationHash(b.metadata.unsDatahub.processGroupRuntime);
+      b.policy.artifactSha256 = api.groupArtifactHash(b.pkg);
+      for (let i = 0; i < 4; i++) {
+        b.configurations[i]!.raw.durableInput.directory = directory;
+        b.policy.placements[i]!.configurationSha256 = api.configurationAuthorizationHash(b.configurations[i]!.raw);
+      }
+      b.write(file, b.policy);
+      process.env["UNS_PROCESS_GROUP_STATE_ROOT"] = a.state;
+      process.env["UNS_PROCESS_GROUP_AUTHORIZATION_DIRECTORY"] = a.state;
+      delete process.env["UNS_PROCESS_GROUP_AUTHORIZATION_FILE"];
+      expect(api.configuredGroupProcessNames().size).toBe(8);
+      for (const f of [a, b]) {
+        const ctx = { ...f.context(0), stateRoot: a.state } as api.ProcessGroupAuthorizationContext;
+        delete ctx.file;
+        expect(api.authorizeProcessGroupRuntime(ctx).groupId).toBe(f.policy.groupId);
+      }
+      fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+      fs.unlinkSync(file);
+      expect(() => api.configuredGroupProcessNames()).toThrow(/registry/);
+      b.write(file, b.policy);
+      expect(api.configuredGroupProcessNames().size).toBe(8);
+      fs.symlinkSync(b.pkg, path.join(a.state, "foreign-link"));
+      expect(() => api.configuredGroupProcessNames()).toThrow(/registry/);
+    } finally {
+      process.env = old;
+      b.close();
+      a.close();
+    }
+  });
+  it("retains valid existing parent permissions beneath a private state root", () => {
+    const f = fixture(),
+      old = { ...process.env };
+    try {
+      fs.mkdirSync(f.policy.directory, { recursive: true, mode: 0o700 });
+      fs.chmodSync(path.dirname(f.policy.directory), 0o755);
+      process.env["UNS_PROCESS_GROUP_STATE_ROOT"] = f.state;
+      process.env["UNS_PROCESS_GROUP_AUTHORIZATION_DIRECTORY"] = f.registry;
+      delete process.env["UNS_PROCESS_GROUP_AUTHORIZATION_FILE"];
+      expect(api.configuredGroupProcessNames().size).toBe(4);
+    } finally {
+      process.env = old;
+      f.close();
+    }
+  });
   it("supervises and stages a second application using descriptor data", () => {
     const f = fixture();
     try {

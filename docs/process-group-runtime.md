@@ -67,6 +67,14 @@ Schema3 policies pin package name, descriptor hash, artifact hash, manifest/mapp
 hashes, channel identities, controller, every placement/configuration and exact
 journal/mount. Private registry: `<stateRoot>/<namespace>/authorizations/<group>.json`;
 journal: `<stateRoot>/<namespace>/admission/<group>`. Declaration alone is insufficient.
+For multiple unrelated applications with separate namespaces, the host may set
+`UNS_PROCESS_GROUP_AUTHORIZATION_DIRECTORY` to the exact private `stateRoot` itself.
+This explicitly selects a bounded collection of namespace registries; policies stay
+at the same per-namespace paths and each child receives only its selected file.
+The previous single-namespace directory selector remains supported unchanged.
+Missing policy for retained work, unknown entries or unsafe links fail closed.
+Neither mode grants authority from application configuration.
+
 A target requires its exact durable operation and launch reservation. Missing response
 means reconcile that same intent, never blindly execute again. Missing policy for
 retained work blocks direct-source launch. Only an explicitly authorized receiver
