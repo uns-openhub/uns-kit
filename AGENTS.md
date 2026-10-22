@@ -3,6 +3,12 @@
 - Do not run any pull-request / deploy workflows from Codex for this repo unless explicitly asked.
 - Default deliverable for PR-related work here is a clear, ready-to-use git commit message (and the code changes), not opening a PR.
 - Hosting: `uns-kit` is on GitHub. Other UNS projects may still live on Azure DevOps, so avoid assuming Azure DevOps PR tooling applies here.
+- Shared runtime architecture:
+  - UNS Kit owns reusable capability/protocol schemas, common validation, identity rules and runtime helpers. Controller owns generic authenticated orchestration, durable platform state and recovery; applications own business parsing, profiles, mappings, topics and units.
+  - New applications or groups using an already supported capability must work through declarations and reviewed configuration, without a package-name branch or business-specific change in Controller. Verify a second unrelated application with different selectors/resources.
+  - Put a missing reusable contract/helper in this SDK first, then integrate the generic host and consumers. Do not copy validators between repositories or execute application code to inspect or authorize capabilities.
+  - Preserve standalone signal/drain cleanup without Controller presence. Keep historical compatibility readers isolated and frozen; new applications/groups use the shared versioned protocol.
+  - The concrete process-group API and its supported limits are documented in `docs/process-group-runtime.md`. Capability declarations do not grant operator permissions; unknown execution outcomes require reconciliation.
 - Mainline branch and commits:
   - Work directly on the repository's remote default branch, currently `master` (`origin/HEAD` and CI both target it). The local `main` branch is stale; do not use it as the release branch. Recheck the remote default branch if the repository is renamed or reconfigured.
   - Commit and push scoped, reviewed package changes directly to that branch; no PR is needed. Use clear commit messages and do not include unrelated working-tree changes.
