@@ -5,6 +5,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import {
+  assertProcessGroupStateMount,
   authorizeConfiguredProcessGroupRuntime,
   configurationAuthorizationHash,
   hasProcessGroupAuthorization,
@@ -75,6 +76,7 @@ export function inspectProcessGroupConfiguration(
     c.journal && (!isLocalPilotPath(pkg) || hasProcessGroupAuthorization())
       ? authorizeConfiguredProcessGroupRuntime(pkg, dir, original, controllerName)
       : undefined;
+  if (production) assertProcessGroupStateMount(production, process.env["UNS_PROCESS_GROUP_STATE_ROOT"] ?? "");
   if (!c.matches || (c.runtimeRole !== undefined && c.runtimeRole !== "publisher") || !publisher || typeof uns.processName !== "string")
     throw Error("This runtime has no supported reviewed group configuration");
   if (c.journal !== undefined) {
@@ -108,7 +110,7 @@ export function inspectProcessGroupConfiguration(
     if (path.isAbsolute(admission.groupManifest) || admission.groupManifest.includes(".."))
       throw Error("Admission manifest must be package-relative");
     const admitted = manifest.parse(JSON.parse(resource(pkg, dir, admission.groupManifest).toString()));
-    for (let parent = admission.directory; parent !== "/"; parent = path.dirname(parent))
+    for (let parent = admission.directory; parent !== path.dirname(parent); parent = path.dirname(parent))
       if (fs.lstatSync(parent).isSymbolicLink()) throw Error("Admission directory cannot use symbolic links");
     const databaseFile = path.join(admission.directory, "admission.sqlite");
     if (fs.lstatSync(databaseFile).isSymbolicLink()) throw Error("Admission journal cannot use symbolic links");

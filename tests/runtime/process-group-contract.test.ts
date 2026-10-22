@@ -319,6 +319,28 @@ describe("shared process-group contract", () => {
       f.close();
     }
   });
+  it("requires the reviewed state mount during inspection before opening journal data", () => {
+    const f = fixture(),
+      old = { ...process.env };
+    try {
+      process.env["UNS_PROCESS_GROUP_STATE_ROOT"] = f.state;
+      process.env["UNS_PROCESS_GROUP_AUTHORIZATION_FILE"] = f.file;
+      delete process.env["UNS_PROCESS_GROUP_AUTHORIZATION_DIRECTORY"];
+      const c = f.configurations[2]!;
+      Object.assign(c.raw, { infra: { host: "127.0.0.1", port: 1883 } });
+      f.policy.placements[2]!.configurationSha256 = api.configurationAuthorizationHash(c.raw);
+      f.save();
+      expect(() =>
+        inspectProcessGroupConfiguration(f.pkg, c.dir, JSON.stringify(c.raw), "local", {
+          configurationChecksum: api.configurationAuthorizationHash,
+          excludedUnsFields: [],
+        }),
+      ).toThrow(/state mount|filesystem mount/);
+    } finally {
+      process.env = old;
+      f.close();
+    }
+  });
   it("rejects unknown protocol, dangerous/overlapping selectors and unsafe pilot paths", () => {
     const f = fixture();
     try {

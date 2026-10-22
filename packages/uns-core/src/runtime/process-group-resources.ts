@@ -16,7 +16,7 @@ function canonical(v: unknown): unknown {
 export const configurationAuthorizationHash = (v: unknown): string => sha256(JSON.stringify(canonical(v)));
 export function readProcessGroupResource(file: string, privateFile = false): Buffer {
   if (file.length > 512 || path.resolve(file) !== file) throw Error("Process-group authorization resource path is not normalized");
-  for (let p = file; p !== "/"; p = path.dirname(p))
+  for (let p = file; p !== path.dirname(p); p = path.dirname(p))
     if (fs.lstatSync(p).isSymbolicLink()) throw Error("Process-group authorization resource cannot contain links");
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
