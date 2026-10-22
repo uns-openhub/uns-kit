@@ -3,6 +3,11 @@
 Available in `@uns-kit/core` 3.0.27. This is an opt-in SDK contract for applications
 and host launchers; ordinary publishers require no migration.
 
+Start with the [Controller/SDK/application ownership rule](controller-runtime-boundary.md).
+The [worked meter-transformer example](examples/process-group-runtime.md) shows
+an unrelated declaration, mapping paths, role configurations, shared verification
+calls and interruption/recovery decisions.
+
 ## Roles and ownership
 
 | Owner | Responsibility |
@@ -60,6 +65,24 @@ Import schemas and helpers from `@uns-kit/core/runtime/process-group-contract.js
 `process-group-authorization.js`, `process-group-control-contract.js`,
 `process-group-inspection.js`, `process-group-supervision.js`, and
 `process-group-staging.js`. Keep application-specific adapters inside the application.
+
+### Shared API map
+
+Paths below are relative to `@uns-kit/core/runtime/` and include `.js` in imports.
+
+| Module | Main integration points |
+| --- | --- |
+| `process-group-contract.js` | `processGroupDescriptor`, descriptor/journal schemas, selector normalization, standard MQTT channel resolution and journal/source identity. |
+| `process-group-authorization.js` | Manifest/policy schemas, `authorizeConfiguredProcessGroupRuntime`, exact journal/mount checks and `assertProcessGroupTargetLaunch`. |
+| `process-group-control-contract.js` | Placement, group-input and member-command schemas shared with host orchestration; no operator authorization or execution by themselves. |
+| `process-group-inspection.js` | `inspectProcessGroupConfiguration` validates installed resources and journal/readiness evidence for host review without importing application code. |
+| `process-group-supervision.js` | `processGroupReceiverSupervision` returns neutral receiver restart settings for host integration. |
+| `process-group-staging.js` | `refreshProcessGroupStagedJournal` records eligible stopped, never-launched, unbound configurations; it does not initialize a journal or permit a launch. |
+| `process-group-snapshot.mjs` | Standalone bounded journal snapshot asset for backup helpers, with exact version/hash provenance. |
+
+The SDK supplies the common checks, not the application's input decoder or SQLite
+writer. A declaration alone does not turn an ordinary publisher into a durable
+receiver or grouped processor. See the worked example before integrating.
 
 ## Authorization and interruption
 

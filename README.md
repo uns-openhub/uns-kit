@@ -37,6 +37,12 @@ pnpm run dev
 For more templates and configure options see [`@uns-kit/cli`](packages/uns-cli).
 For producer-side schema metadata examples, including relationship evidence and
 lifecycle roles, see [`docs/schema-system-metadata.md`](docs/schema-system-metadata.md).
+For the shared Controller/SDK/application boundary, standalone lifecycle and
+recovery rules, see
+[`docs/controller-runtime-boundary.md`](docs/controller-runtime-boundary.md).
+For opt-in reviewed process consolidation in core 3.0.27, see the
+[process-group protocol guide](docs/process-group-runtime.md) and its
+[worked application example](docs/examples/process-group-runtime.md).
 For the active cross-repository migration of MQTT table columns from arrays to
 named objects, see
 [`docs/mqtt-table-columns-object-migration-plan.md`](docs/mqtt-table-columns-object-migration-plan.md).
