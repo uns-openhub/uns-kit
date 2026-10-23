@@ -109,6 +109,13 @@ Unknown versions fail closed. No application data or journal is rewritten by a
 version bump. SIGINT/SIGTERM handling and idempotent drain remain application-owned
 and must work without the Controller.
 
+## Already grouped version upgrades
+
+The [paired version upgrade guide](process-group-version-upgrade.md) describes the
+shared SDK 3.0.28 helpers and the separate host integration for preserving an existing publisher/receiver
+journal across a reviewed version change and rollback. It is separate from the
+original N-to-one consolidation operation and does not alter application business logic.
+
 ## Scope and limits
 
 This version supports one owning controller, one package, 2–16 source publishers,

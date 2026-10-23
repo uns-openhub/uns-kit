@@ -27,7 +27,8 @@ export function processGroupReceiverSupervision(
   if (max < 128 || max > 4096) throw Error("Admission supervisor memory limit must be 128–4096 MiB");
   return {
     autorestart: true,
-    stop_exit_codes: [78],
+    // Successful standalone/guarded shutdown and explicit contract refusal are terminal.
+    stop_exit_codes: [0, 78],
     min_uptime: 10000,
     max_restarts: 5,
     exp_backoff_restart_delay: 1000,

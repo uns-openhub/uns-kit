@@ -9,6 +9,28 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.28 - Paired process-group version upgrades
+
+When crossing `<3.0.28` to `>=3.0.28`, shared schemas and installed-resource review support a
+publisher/receiver version upgrade on the same retained journal. Host launchers
+must consume the shared helpers and enforce authenticated durable orchestration;
+applications must not copy the upgrade protocol or add Controller-specific business
+adapters. Existing protocol 1 applications need no mapping, topic, unit or writer
+change. Historical policy readers remain frozen, while the reviewed new artifact
+uses generic policy schema 3. See `docs/process-group-version-upgrade.md`.
+
+The neutral receiver supervisor now treats clean exit `0` and explicit contract
+refusal `78` as terminal; other failures remain subject to bounded restart.
+During planned shutdown the host must park existing supervision as well as verify
+the guarded application exit, including for receivers started by older launchers.
+Do not infer completed drain from PM2 online/stopped or a sent signal.
+
+A candidate policy validation is review-only. Actual launch still needs the live
+canonical policy and exact durable operation/launch reservation. Missing responses
+are reconciled on the same operation. SDK publication is a separate manual step;
+downstream releases must install the published version and regenerate registry
+lockfiles before releasing their host integration.
+
 ## 3.0.26 - Broker-acknowledged input subscriptions
 
 When upgrading from `<3.0.26` to `>=3.0.26`, `mqttProxyStatus` includes the additive

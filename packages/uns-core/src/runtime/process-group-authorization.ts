@@ -211,14 +211,17 @@ export interface ProcessGroupAuthorizationContext {
   stateRoot?: string;
   initialize?: boolean;
 }
-export function authorizeProcessGroupRuntime(context: ProcessGroupAuthorizationContext): ProcessGroupAuthorization {
+function verifyRuntimePolicy(context: ProcessGroupAuthorizationContext, candidate?: Buffer): ProcessGroupAuthorization {
   try {
     const root = context.stateRoot ?? process.env["UNS_PROCESS_GROUP_STATE_ROOT"];
     if (!root || !context.controllerName) throw Error();
     const file = selectedFile(context.packageRoot, context.rawConfiguration, root, context.file),
-      bytes = read(file, true),
+      bytes = candidate ?? read(file, true),
       unparsed = JSON.parse(bytes.toString());
-    if (unparsed.schemaVersion !== 3) return legacy.authorizeHvRuntime({ ...context, file, stateRoot: root });
+    if (unparsed.schemaVersion !== 3) {
+      if (candidate) throw Error("Only generic policies can be staged");
+      return legacy.authorizeHvRuntime({ ...context, file, stateRoot: root });
+    }
     const p = processGroupAuthorizationSchema.parse(unparsed),
       d = processGroupDescriptor(context.packageRoot);
     if (!d || d.legacy) throw Error("Generic runtime descriptor required");
@@ -304,11 +307,24 @@ export function authorizeProcessGroupRuntime(context: ProcessGroupAuthorizationC
       groupProcessName: m.processName,
       namespace: d.namespace,
     });
-    issued.add(result);
+    if (!candidate) issued.add(result);
     return result;
   } catch {
     throw Error("Process-group runtime authorization is missing, changed or does not match this installed placement; review required");
   }
+}
+/** Live authority always comes from the current canonical private policy. */
+export function authorizeProcessGroupRuntime(context: ProcessGroupAuthorizationContext): ProcessGroupAuthorization {
+  return verifyRuntimePolicy(context);
+}
+/** Review only: never issues an authorization accepted by runtime/launch checks. */
+export function validateProcessGroupPolicyCandidate(context: ProcessGroupAuthorizationContext, bytes: Buffer): void {
+  verifyRuntimePolicy(context, bytes);
+}
+export function processGroupAuthorizationFile(context: ProcessGroupAuthorizationContext): string {
+  const root = context.stateRoot ?? process.env["UNS_PROCESS_GROUP_STATE_ROOT"];
+  if (!root) throw Error("Missing process-group state root");
+  return selectedFile(context.packageRoot, context.rawConfiguration, root, context.file);
 }
 export const authorizeHvRuntime = authorizeProcessGroupRuntime;
 export function authorizeConfiguredProcessGroupRuntime(

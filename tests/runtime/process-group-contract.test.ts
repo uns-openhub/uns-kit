@@ -350,7 +350,7 @@ describe("shared process-group contract", () => {
           { supervised: true, persistent: true, authorized: true },
           { enabled: true, restartOnExit: true, restartOnUnhealthy: false },
         ),
-      ).toMatchObject({ autorestart: true, stop_exit_codes: [78] });
+      ).toMatchObject({ autorestart: true, stop_exit_codes: [0, 78] });
       const raw = f.configurations[3]!.raw;
       delete (raw.durableInput as { journalId?: string }).journalId;
       f.write(path.join(f.configurations[3]!.dir, "config.json"), raw);
