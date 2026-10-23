@@ -1,6 +1,7 @@
 import { processGroupUpgradeRequestSchema } from "../packages/uns-core/src/runtime/process-group-upgrade.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
@@ -25,7 +26,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true });
 });
 function fixture(nested = false) {
-  const root = fs.mkdtempSync("/private/tmp/sdk-pair-upgrade-"),
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(tmpdir()), "sdk-pair-upgrade-")),
     stateRoot = path.join(root, "state"),
     directory = path.join(stateRoot, "telemetry", "admission", "line-x"),
     policyFile = path.join(stateRoot, "telemetry", "authorizations", "line-x.json");
