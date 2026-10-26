@@ -1,3 +1,4 @@
+import type { MqttPublishQueueOptions } from "../uns-mqtt/publish-queue-contract.js";
 import type { HandoverShutdownHooks } from "./handover-shutdown.js";
 import { UnsAttributeType } from "../graphql/schema.js";
 import { MeasurementUnit } from "./uns-measurements.js";
@@ -111,6 +112,8 @@ export function isQuestDbType(value: unknown): value is QuestDbType {
 }
 
 export interface IUnsParameters {
+  /** Optional MQTT output persistence; absence keeps issued queue behavior. */
+  publishQueue?: MqttPublishQueueOptions;
   mqttSubToTopics?: string | string[];
   username?: string;
   password?: string;

@@ -1,3 +1,4 @@
+import { MqttPublishQueue } from "./publish-queue.js";
 import { IClientPublishOptions } from "mqtt";
 import { join } from "path";
 import { parentPort } from "worker_threads";
@@ -10,8 +11,9 @@ import { ThrottledPublisher, ThrottledSubscriber } from "./throttled-queue.js";
 
 export class MqttWorker {
   private mqttProxy: MqttProxy;
-  protected publisher: ThrottledPublisher;
+  protected publisher: ThrottledPublisher | MqttPublishQueue;
   protected subscriber: ThrottledSubscriber;
+  private defaultPublishOptions?: IClientPublishOptions;
 
   constructor(workerData: IMqttWorkerData) {
     const publishThrottlingDelay = workerData.publishThrottlingDelay ?? 1;
@@ -25,10 +27,11 @@ export class MqttWorker {
     const publisherActive = workerData.publisherActive;
     const subscriberActive = workerData.subscriberActive;
     const defaultPublishOptions = workerData.defaultPublishOptions;
+    this.defaultPublishOptions = defaultPublishOptions;
 
     // Initialize and start the MQTT proxy.
     this.mqttProxy = new MqttProxy(mqttHost, instanceName, mqttParameters, this);
-    this.mqttProxy.start();
+    void this.mqttProxy.start()?.catch((): void => {});
 
     // Set up the event listener for incoming messages from the MQTT proxy.
     this.mqttProxy.event.on("input", (event) => {
@@ -58,6 +61,14 @@ export class MqttWorker {
     };
 
     // Create an instance of ThrottledPublisher.
+    if (workerData.publishQueue) {
+      if (publishConcurrency !== 1 || persistToDisk) throw Error("MQTT output persistence requires serial publishing and cannot combine with legacy persistToDisk");
+      if (!workerData.publishQueueIdentity) throw Error("MQTT outbox requires an explicit stable owner/destination identity");
+      this.publisher = new MqttPublishQueue(workerData.publishQueue, workerData.publishQueueIdentity,
+        record => this.mqttProxy.publishConfirmed(record.topic, record.message, record.options,
+          workerData.publishQueue.publishTimeoutMs ?? 10000), publisherActive,
+        status => parentPort?.postMessage({ command: "publishQueueStatus", status }));
+    } else {
     this.publisher = new ThrottledPublisher(
       publishThrottlingDelay,
       publishFunction,
@@ -68,6 +79,7 @@ export class MqttWorker {
       publishConcurrency,
       maxPendingPublishes,
     );
+    }
 
     // Define the message handler for incoming messages.
     const messageHandler = async (topic: string, message: string): Promise<void> => {
@@ -99,27 +111,28 @@ export class MqttWorker {
     parentPort?.on("message", async (msg) => {
       if (msg && msg.command === "enqueue" && msg.id && msg.topic && msg.message !== undefined) {
         try {
-          const publishPromise = this.publisher.enqueueOrThrow(msg.topic, msg.message, msg.id, msg.options);
+          const publishPromise = this.publisher.enqueueOrThrow(msg.topic, msg.message, msg.id, msg.options ?? this.defaultPublishOptions);
           parentPort?.postMessage({
             command: "enqueueAccepted",
             id: msg.id,
             status: "accepted",
           });
+          const { id, topic } = msg;
           void publishPromise
             .then(() => {
               parentPort?.postMessage({
                 command: "publishResult",
-                id: msg.id,
+                id,
                 status: "success",
-                topic: msg.topic,
+                topic,
               });
             })
             .catch((error: any) => {
               parentPort?.postMessage({
                 command: "publishResult",
-                id: msg.id,
+                id,
                 status: "error",
-                topic: msg.topic,
+                topic,
                 error: error?.message ?? String(error),
               });
             });
@@ -131,12 +144,28 @@ export class MqttWorker {
             error: error?.message ?? String(error),
           });
         }
+      } else if (msg?.command === "flushPublishes" && this.publisher instanceof MqttPublishQueue) {
+        try {
+          await this.publisher.waitForIdle(msg.timeoutMs);
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "success" });
+        } catch {
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "error", error: "MQTT queue drain failed or timed out; pending work retained" });
+        }
+      } else if (msg?.command === "closePublisher" && this.publisher instanceof MqttPublishQueue) {
+        try {
+          await this.mqttProxy.stop({ force: true });
+          await this.publisher.close();
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "success" });
+        } catch {
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "error", error: "MQTT output could not be safely persisted/closed; worker retained" });
+        }
       } else if (msg && msg.command === "subscribeAsync" && msg.topics) {
         this.mqttProxy.subscribeAsync(msg.topics);
       } else if (msg && msg.command === "unsubscribeAsync" && msg.topics) {
         this.mqttProxy.unsubscribeAsync(msg.topics);
       } else if (msg && msg.command === "setPublisherActive") {
-        this.publisher.becomeActive({batchSize: msg?.batchSize, referenceHash: msg?.referenceHash});
+        try { this.publisher.becomeActive({batchSize: msg?.batchSize, referenceHash: msg?.referenceHash}); }
+        catch { parentPort?.postMessage({ command: "publishQueueControlError", error: "Persistent output cannot resume using a legacy skip hash" }); }
       } else if (msg && msg.command === "setPublisherPassive") {
         const snapshot = await this.publisher.becomePassive(3);
         parentPort?.postMessage({

@@ -9,6 +9,7 @@ import { DataSizeMeasurements, PhysicalMeasurements } from "../uns/uns-measureme
 
 export type MqttStopOptions = {
   silent?: boolean;
+  force?: boolean;
   reason?: "retry" | "shutdown";
 };
 
@@ -308,6 +309,29 @@ export default class MqttProxy {
     });
   }
 
+  /** A bounded delivery attempt for the SDK outbox. Expired attempts retire their socket. */
+  public async publishConfirmed(topic: string, message: string, options: mqtt.IClientPublishOptions, timeoutMs: number): Promise<void> {
+    let timer: ReturnType<typeof setTimeout>;
+    let timedOut = false;
+    try {
+      await Promise.race([
+        this.publish(topic, message, options),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => {
+          timedOut = true;
+          reject(new Error("MQTT broker acknowledgement timed out; delivery outcome unknown"));
+        }, timeoutMs); }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      if (timedOut) {
+        // Do not retry alongside mqtt.js's old in-flight operation. A late PUBACK may
+        // already have followed delivery: the outbox deliberately permits replay.
+        await this.stop({ silent: true, reason: "retry", force: true });
+        void this.start().catch((): void => {});
+      }
+    }
+  }
+
   public async subscribeAsync(topic: string | string[], options?: mqtt.IClientSubscribeOptions): Promise<mqtt.ISubscriptionGrant[]> {
     return this.mqttClient.subscribeAsync(topic, options);
   }
@@ -351,7 +375,7 @@ export default class MqttProxy {
           this.transformationStatsInterval = null;
         }
         if (this.mqttClient) {
-          this.mqttClient.end(false, () => {
+          this.mqttClient.end(options.force ?? false, () => {
             resetState();
             if (shouldLogDisconnect) {
               logger.debug(`${this.instanceName} - Disconnected from MQTT broker.`);

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { mqttPublishQueueSchema, type MqttPublishQueueStatus } from "./publish-queue-contract.js";
 import { readFileSync } from "fs";
 import { IClientPublishOptions } from "mqtt";
 import * as path from "path";
@@ -99,6 +101,11 @@ export default class UnsMqttProxy extends UnsProxy {
   private lifecycleState: UnsMqttProxyLifecycleState = "running";
   private stopPromise: Promise<void> | null = null;
   private expectedWorkerExit = false;
+  private publishQueueStatus?: MqttPublishQueueStatus;
+  private admissionBytes = new Map<string, number>();
+  private pendingAdmissionBytes = 0;
+  private queueRequests = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+
 
   constructor(
     mqttHost: string,
@@ -146,7 +153,11 @@ export default class UnsMqttProxy extends UnsProxy {
       key: unsParameters?.key,
       servername: unsParameters?.servername,
     };
-    this.unsParameters = unsParameters ?? {};
+    this.unsParameters = { ...(unsParameters ?? {}) };
+    if (unsParameters?.publishQueue) {
+      this.unsParameters.publishQueue = mqttPublishQueueSchema.parse(unsParameters.publishQueue);
+      if ((unsParameters.publishConcurrency ?? 1) !== 1) throw Error("Persistent MQTT output requires publishConcurrency=1");
+    }
     this.startQueueWorker(mqttHost, this.instanceNameWithSuffix, mqttParameters, publisherActive, subscriberActive);
   }
 
@@ -211,6 +222,13 @@ export default class UnsMqttProxy extends UnsProxy {
       maxPendingPublishes: this.unsParameters.maxPendingPublishes,
       subscribeThrottlingDelay: this.unsParameters.subscribeThrottlingDelay ?? 1,
       persistToDisk: false,
+      publishQueue: this.unsParameters.publishQueue,
+      publishQueueIdentity: this.unsParameters.publishQueue ? JSON.stringify({
+        package: packageJson.name, owner: instanceNameWithSuffix,
+        host: mqttHost, port: mqttParameters.port ?? (mqttParameters.mqttSSL ? 8883 : 1883),
+        protocol: mqttParameters.protocol ?? (mqttParameters.mqttSSL ? "mqtts" : "mqtt"),
+        hosts: mqttParameters.hosts ?? null, servers: mqttParameters.servers ?? null,
+      }) : undefined,
       mqttHost: mqttHost,
       instanceNameWithSuffix: instanceNameWithSuffix,
       mqttParameters: mqttParameters,
@@ -222,10 +240,22 @@ export default class UnsMqttProxy extends UnsProxy {
     this.worker = new Worker(workerScriptPath, { workerData });
 
     this.worker.on("message", (msg) => {
-      if (msg && msg.command === "enqueueAccepted" && msg.id) {
+      if (msg?.command === "publishQueueStatus") {
+        this.publishQueueStatus = msg.status;
+      } else if (msg?.command === "publishQueueReply") {
+        const pending = this.queueRequests.get(msg.id);
+        if (pending) {
+          clearTimeout(pending.timer); this.queueRequests.delete(msg.id);
+          if (msg.status === "success") pending.resolve(); else pending.reject(new Error(msg.error));
+        }
+      } else if (msg?.command === "publishQueueControlError") {
+        this.event.emit("error", { code: 0, message: msg.error });
+      } else if (msg && msg.command === "enqueueAccepted" && msg.id) {
         const pending = this.pendingEnqueues.get(msg.id);
         if (pending) {
           this.pendingEnqueues.delete(msg.id);
+          this.pendingAdmissionBytes -= this.admissionBytes.get(msg.id) ?? 0;
+          this.admissionBytes.delete(msg.id);
           if (msg.status === "accepted") {
             this.pendingPublishCompletions.add(msg.id);
             pending.resolve();
@@ -287,18 +317,25 @@ export default class UnsMqttProxy extends UnsProxy {
         reject(this.workerFailure);
         return;
       }
-      const maxPendingPublishes = this.unsParameters.maxPendingPublishes;
+      const maxPendingPublishes = this.unsParameters.maxPendingPublishes ?? this.unsParameters.publishQueue?.maxRecords;
       const pendingCount = this.pendingEnqueues.size + this.pendingPublishCompletions.size;
       if (maxPendingPublishes !== undefined && pendingCount >= maxPendingPublishes) {
         reject(new Error(`${this.instanceNameWithSuffix} - Publisher queue is full (${maxPendingPublishes}).`));
         return;
       }
-      const id = `${Date.now()}-${Math.random()}`;
+      const bytes = Buffer.byteLength(topic) + Buffer.byteLength(message) + 256;
+      const queue = this.unsParameters.publishQueue;
+      if (queue && (bytes > queue.maxMessageBytes! || this.pendingAdmissionBytes + bytes > queue.maxBytes!)) {
+        reject(new Error("MQTT output admission byte limit reached")); return;
+      }
+      const id = randomUUID();
+      if (queue) { this.admissionBytes.set(id, bytes); this.pendingAdmissionBytes += bytes; }
       this.pendingEnqueues.set(id, { resolve, reject });
       try {
         this.worker.postMessage({ command: "enqueue", id, topic, message, options });
       } catch (error) {
         this.pendingEnqueues.delete(id);
+        this.pendingAdmissionBytes -= this.admissionBytes.get(id) ?? 0; this.admissionBytes.delete(id);
         reject(error);
       }
       this.notifyDrainWaiters();
@@ -376,6 +413,10 @@ export default class UnsMqttProxy extends UnsProxy {
   public async drainPublishes(timeoutMs: number = UnsMqttProxy.DEFAULT_DRAIN_TIMEOUT_MS): Promise<void> {
     if (this.workerFailure) {
       throw this.workerFailure;
+    }
+    if (this.unsParameters.publishQueue) {
+      await this.requestPublishQueue("flushPublishes", timeoutMs);
+      return;
     }
     if (this.pendingEnqueues.size === 0 && this.pendingPublishCompletions.size === 0) {
       return;
@@ -736,7 +777,10 @@ export default class UnsMqttProxy extends UnsProxy {
     }
 
     this.lifecycleState = "stopping";
-    this.stopPromise = this.performStop(options);
+    this.stopPromise = this.performStop(options).catch(error => {
+      if (this.unsParameters.publishQueue && this.lifecycleState !== "stopped") this.stopPromise = null;
+      throw error;
+    });
     return this.stopPromise;
   }
 
@@ -755,6 +799,10 @@ export default class UnsMqttProxy extends UnsProxy {
       }
     }
 
+    if (this.worker && this.unsParameters.publishQueue && !this.workerFailure) {
+      // A failed spill must keep the live worker/RAM available for inspection or retry.
+      await this.requestPublishQueue("closePublisher", timeoutMs);
+    }
     if (this.worker) {
       this.expectedWorkerExit = true;
       try {
@@ -775,7 +823,27 @@ export default class UnsMqttProxy extends UnsProxy {
     }
   }
 
+  public getPublishQueueStatus(): MqttPublishQueueStatus | undefined {
+    return this.publishQueueStatus ? { ...this.publishQueueStatus } : undefined;
+  }
+
+  private requestPublishQueue(command: "flushPublishes" | "closePublisher", timeoutMs: number): Promise<void> {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return Promise.reject(new Error("MQTT queue timeout must be positive and finite"));
+    if (this.queueRequests.size >= 64) return Promise.reject(new Error("Too many pending MQTT queue control requests"));
+    return new Promise((resolve, reject) => {
+      const id = randomUUID();
+      const timer = setTimeout(() => {
+        this.queueRequests.delete(id); reject(new Error("MQTT queue control timed out; outcome unconfirmed"));
+      }, timeoutMs);
+      this.queueRequests.set(id, { resolve, reject, timer });
+      try { this.worker.postMessage({ command, id, timeoutMs }); }
+      catch (error) { clearTimeout(timer); this.queueRequests.delete(id); reject(error); }
+    });
+  }
+
   private failPendingPublishes(reason: Error): void {
+    for (const request of this.queueRequests.values()) { clearTimeout(request.timer); request.reject(reason); }
+    this.queueRequests.clear();
     this.workerFailure = reason;
     this.rejectOutstandingPublishes(reason);
   }
@@ -785,6 +853,7 @@ export default class UnsMqttProxy extends UnsProxy {
       pending.reject(reason);
     }
     this.pendingEnqueues.clear();
+    this.admissionBytes.clear(); this.pendingAdmissionBytes = 0;
     this.pendingPublishCompletions.clear();
 
     const waiters = this.drainWaiters.splice(0);

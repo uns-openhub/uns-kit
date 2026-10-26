@@ -91,7 +91,17 @@ describe("Zod 4 config contracts", () => {
     const trackedTypes = await readFile(path.resolve(repoRoot, "packages/uns-core/src/config/app-config.ts"), "utf8");
 
     expect(missingLocalRefs(generatedJson)).toEqual([]);
-    expect(contractDigest(generatedJson)).toBe(zod3JsonContractDigest);
+    // Preserve the issued contract byte-for-byte after removing only the new,
+    // explicitly optional output capability. Do not replace the legacy digest.
+    const legacyProjection = structuredClone(generatedJson);
+    const app = resolveLocalRef(legacyProjection, String(legacyProjection.$ref));
+    const props = app.properties as Record<string, JsonSchema>;
+    expect((props.output.properties as Record<string, JsonSchema>).publishQueue).toBeDefined();
+    expect(props.output.required ?? []).not.toContain("publishQueue");
+    expect((props.input.properties as Record<string, JsonSchema>).publishQueue).toBeUndefined();
+    expect((props.infra.properties as Record<string, JsonSchema>).publishQueue).toBeUndefined();
+    delete (props.output.properties as Record<string, JsonSchema>).publishQueue;
+    expect(contractDigest(legacyProjection)).toBe(zod3JsonContractDigest);
     expect(generatedTypes).toBe(trackedTypes);
   });
 

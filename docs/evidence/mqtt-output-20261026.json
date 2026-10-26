@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "sourceVersion": "3.0.30",
+  "stage": "prepared-source-not-npm-publication",
+  "recordedAt": "2026-10-26T21:59:28.828548+00:00",
+  "tests": {
+    "core": 269,
+    "workflow": 415,
+    "externalAzureSkipped": 1,
+    "mqttQueue": 18
+  },
+  "wire": {
+    "tests": [
+      {
+        "name": "actual-built-proxy-worker",
+        "published": 20,
+        "observed": 20,
+        "pending": 0
+      },
+      {
+        "name": "broker-outage-owner-SIGKILL-retained-restart",
+        "committed": 7,
+        "retainedAfterKill": 7,
+        "distinctObserved": 7,
+        "pending": 0
+      },
+      {
+        "name": "buffered-failure-spill-independent-owner-restart",
+        "retained": 7,
+        "distinctObserved": 7,
+        "pending": 0
+      },
+      {
+        "name": "actual-lost-PUBACK",
+        "droppedPubacks": 1,
+        "observedDuplicates": 2,
+        "pending": 0
+      }
+    ],
+    "cleanup": {
+      "ownedProcessesStopped": true,
+      "productionTouched": false,
+      "syntheticOutboxesRetained": true
+    }
+  },
+  "linux": {
+    "pass": true,
+    "platform": "linux",
+    "uid": 1000,
+    "node": "v24.16.0",
+    "summaries": [
+      {
+        "mode": "durable",
+        "accepted": 128,
+        "persistedBeforeKill": 128,
+        "retainedAfterKill": 128,
+        "observedAfterReopen": 128,
+        "expectedVolatileLoss": 0
+      },
+      {
+        "mode": "buffered",
+        "accepted": 128,
+        "persistedBeforeKill": 0,
+        "retainedAfterKill": 0,
+        "observedAfterReopen": 0,
+        "expectedVolatileLoss": 128
+      }
+    ],
+    "network": "none",
+    "production": false
+  },
+  "packed": {
+    "pass": true,
+    "installedArchive": true,
+    "typesChecked": true,
+    "frozenInstall": true,
+    "retainedAcrossReopen": 1,
+    "delivered": 1,
+    "package": "@uns-kit/core@3.0.30",
+    "integrity": "sha512-PuSJjWp3zakgJCnxUc0VkjyL/ju7CB5QjuAN/TnXdxY17WM52pHAdcuM825f4tp/S3eUiEr8nUypAj9h3Mb65w=="
+  },
+  "limits": {
+    "inputAcknowledgementsUnchanged": true,
+    "oneOwner": true,
+    "legacyHandoverSupported": false,
+    "exactlyOnceClaim": false,
+    "automaticHostBackupEnrollment": false,
+    "productionChanged": false,
+    "npmPublished": false
+  }
+}

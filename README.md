@@ -53,6 +53,9 @@ For the active cross-repository migration of MQTT table columns from arrays to
 named objects, see
 [`docs/mqtt-table-columns-object-migration-plan.md`](docs/mqtt-table-columns-object-migration-plan.md).
 
+For the optional MQTT output queue prepared in source3.0.30, see
+[`docs/mqtt-output-persistence.md`](docs/mqtt-output-persistence.md).
+
 ## Monorepo structure
 
 - `packages/` — all `@uns-kit/*` packages, each builds and publishes independently.

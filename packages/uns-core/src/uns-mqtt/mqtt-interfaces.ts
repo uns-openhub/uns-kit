@@ -1,6 +1,9 @@
+import type { MqttPublishQueueOptions } from "./publish-queue-contract.js";
 import { IClientPublishOptions } from "mqtt";
 
 export interface IMqttParameters {
+  /** Opt-in output queue; not a durable MQTT input subscription. */
+  publishQueue?: MqttPublishQueueOptions;
   mqttSubToTopics?: string | string[];
   username?: string;
   password?: string;
@@ -52,6 +55,8 @@ export interface HandoverManagerEvents {
 }
 
 export interface IMqttWorkerData {
+  publishQueue?: MqttPublishQueueOptions;
+  publishQueueIdentity?: string;
   publishThrottlingDelay?: number; // Delay in milliseconds; default is 1ms
   publishConcurrency?: number; // Maximum concurrent outgoing publishes; default is 1
   maxPendingPublishes?: number; // Maximum accepted queued+in-flight publishes; default is unlimited

@@ -18,3 +18,5 @@ const runtimeSnapshotSource=path.resolve("src/runtime/process-group-snapshot.mjs
 const runtimeSnapshotDest=path.resolve("dist/runtime/process-group-snapshot.mjs");
 fs.mkdirSync(path.dirname(runtimeSnapshotDest),{recursive:true});
 fs.copyFileSync(runtimeSnapshotSource,runtimeSnapshotDest);
+
+fs.copyFileSync(path.resolve("src/runtime/process-group-backup-contract.json"),path.resolve("dist/runtime/process-group-backup-contract.json"));

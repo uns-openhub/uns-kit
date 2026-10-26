@@ -9,6 +9,37 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.30 - Optional MQTT output buffering and durable admission
+
+When crossing `<3.0.30` to `>=3.0.30`, output persistence remains optional.
+Registry3.0.29 must not be assumed to contain these APIs. Ordinary
+applications require no migration and keep the old publisher behavior.
+
+Opt-in TypeScript applications may configure `output.publishQueue` and pass it via
+standard MQTT channel resolution. `buffered` uses RAM with spill-on-failure/overflow;
+`durable` acknowledges local admission only after a SQLite WAL/FULL commit. Both
+require QoS1/2, serial output and an explicit private persistent directory. A publish
+call acknowledges admission; `flush()` includes retained records and waits for broker
+completion. Unknown delivery outcomes can replay. Input MQTT ACKs are not changed.
+
+Use one owner with `handover=false`. Legacy RAM hash handover cannot transfer the
+outbox. Preserve existing application journals/Archiver spools; do not reinterpret,
+move or delete them as part of this opt-in. Host migration/automatic backup, Python,
+SQL writers and non-MQTT destinations remain outside this capability. See the source
+`docs/mqtt-output-persistence.md` and two unrelated examples before enabling it.
+
+### Shared bounded journal backup coverage in 3.0.30
+
+Consume `runtime/process-group-backup-contract.js` for public coverage validation,
+and vendor the matching standalone exporter plus contract JSON with source/digest
+provenance in native helpers. The fixed contract supports32 journals while keeping
+512MiB snapshot and1GiB capsule bounds. Do not take limits from an operation request.
+Old two-argument exporter callers keep their nine-journal limit; archives through9
+remain compatible. Older readers may reject larger new captures, so coordinate the
+host/helper rollout. Preserve all source journals and reject overflow without partial
+success. See `docs/process-group-backup-capacity.md`. This follow-up is not
+part of source3.0.29; use the coordinated3.0.30 SDK, host and helper before rollout.
+
 ## 3.0.29 - Optional configuration resources and reviewed journal transitions
 
 Release preparation: source/packaged local acceptance is complete; npm publication

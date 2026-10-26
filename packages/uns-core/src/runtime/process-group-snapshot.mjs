@@ -4,7 +4,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync, backup } from "node:sqlite";
 
-const [root, output] = process.argv.slice(2);
+const [root, output, suppliedContract] = process.argv.slice(2);
+// The host passes the fixed SDK contract, never request-controlled limits. Legacy
+// two-argument callers retain their historical nine-journal bound.
+const limits = suppliedContract === undefined
+  ? {schemaVersion:1,maximumJournals:9,maximumManifestBytes:262144,maximumSnapshotBytes:536870912,maximumCapsuleBytes:1073741824}
+  : JSON.parse(suppliedContract);
+if (JSON.stringify(Object.keys(limits).sort()) !== JSON.stringify(["schemaVersion","maximumJournals","maximumManifestBytes","maximumSnapshotBytes","maximumCapsuleBytes"].sort()) ||
+    limits.schemaVersion !== 1 || !Number.isSafeInteger(limits.maximumJournals) || limits.maximumJournals < 1 || limits.maximumJournals > 128 ||
+    limits.maximumManifestBytes !== 262144 || limits.maximumSnapshotBytes !== 536870912 || limits.maximumCapsuleBytes !== 1073741824)
+  throw Error("Unsupported fixed snapshot contract");
 const hash = (b) => crypto.createHash("sha256").update(b).digest("hex");
 const fileHash = (p) => {
   const h = crypto.createHash("sha256"),
@@ -83,9 +92,9 @@ for (const namespace of namespaces) {
   }
   check(admittedRoot, true);
   const groups = fs.readdirSync(admittedRoot).sort();
-  if (groups.length > 9) fail();
+  if (groups.length > limits.maximumJournals) fail();
   for (const group of groups) {
-    if (!/^[a-z][a-z0-9-]{0,99}$/.test(group) || capturedGroups.has(group) || capturedGroups.size >= 9) fail();
+    if (!/^[a-z][a-z0-9-]{0,99}$/.test(group) || capturedGroups.has(group) || capturedGroups.size >= limits.maximumJournals) fail();
     capturedGroups.add(group);
     const source = path.join(admittedRoot, group);
     check(source, true);
@@ -102,7 +111,7 @@ for (const namespace of namespaces) {
       }
     }, 0);
     capturedBytes += sourceSize;
-    if (capturedBytes > 512 * 1024 * 1024) fail();
+    if (capturedBytes > limits.maximumSnapshotBytes) fail();
     const space = fs.statfsSync(output, { bigint: true });
     if (space.bavail * space.bsize < BigInt(sourceSize * 2 + 64 * 1024 * 1024)) fail();
     const target = path.join(output, group);
@@ -123,7 +132,7 @@ for (const namespace of namespaces) {
             space = fs.statfsSync(output, { bigint: true });
           if (
             !Number.isSafeInteger(bytes) ||
-            bytes > 512 * 1024 * 1024 - snapshotBytes ||
+            bytes > limits.maximumSnapshotBytes - snapshotBytes ||
             space.bavail * space.bsize < BigInt(bytes + 64 * 1024 * 1024)
           )
             fail();
@@ -228,7 +237,7 @@ for (const namespace of namespaces) {
         fs.closeSync(fd);
       }
       snapshotBytes += fs.statSync(p).size;
-      if (snapshotBytes > 512 * 1024 * 1024) fail();
+      if (snapshotBytes > limits.maximumSnapshotBytes) fail();
       info[name === "admission.sqlite" ? "admissionSha256" : "ownershipSha256"] = fileHash(p);
     }
     manifest.groups.push(info);
@@ -236,5 +245,7 @@ for (const namespace of namespaces) {
 }
 const remaining = fs.statfsSync(output, { bigint: true });
 if (remaining.bavail * remaining.bsize < BigInt(snapshotBytes + 64 * 1024 * 1024)) fail();
-fs.writeFileSync(path.join(output, "manifest.json"), JSON.stringify(manifest) + "\n", { mode: 0o600, flag: "wx" });
+const manifestBytes = JSON.stringify(manifest) + "\n";
+if (Buffer.byteLength(manifestBytes) > limits.maximumManifestBytes) fail();
+fs.writeFileSync(path.join(output, "manifest.json"), manifestBytes, { mode: 0o600, flag: "wx" });
 // No source payloads, credentials, paths or process metadata on stdout/stderr.

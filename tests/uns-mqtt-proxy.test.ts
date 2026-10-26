@@ -339,3 +339,49 @@ describe("generated numeric delta semantics", () => {
     } finally { await test.proxy.stop({ drain: false }); }
   });
 });
+
+
+describe("UnsMqttProxy opt-in output queue controls", () => {
+  beforeEach(() => { FakeWorker.instances.length = 0; });
+  afterEach(() => { for (const w of FakeWorker.instances) w.removeAllListeners(); FakeWorker.instances.length = 0; });
+  const proxyWithQueue = () => new UnsMqttProxy("localhost", "camera-service", "output", {
+    publishQueue: { mode: "durable", directory: "/private/tmp/queue-controls", maxRecords: 2, maxBytes: 1024 },
+  });
+  it("flush asks the worker to drain recovered work even with no new local admissions", async () => {
+    const proxy = proxyWithQueue(), worker = getLastWorker();
+    const flushed = proxy.flush(1000), request = worker.postedMessages.at(-1);
+    expect(request.command).toBe("flushPublishes");
+    worker.emit("message", { command: "publishQueueReply", id: request.id, status: "success" });
+    await flushed;
+  });
+  it("does not claim recovered records drained when the worker reports a retained backlog", async () => {
+    const proxy = proxyWithQueue(), worker = getLastWorker();
+    const flushed = proxy.flush(1000), request = worker.postedMessages.at(-1);
+    worker.emit("message", { command: "publishQueueReply", id: request.id, status: "error", error: "pending work retained" });
+    await expect(flushed).rejects.toThrow("retained");
+  });
+  it("preserves its worker when a close cannot persist buffered work, and permits retry", async () => {
+    const proxy = proxyWithQueue(), worker = getLastWorker();
+    const first = proxy.stop({ drain: false, timeoutMs: 1000 });
+    await vi.waitFor(() => expect(worker.postedMessages.at(-1)?.command).toBe("closePublisher"));
+    worker.emit("message", { command: "publishQueueReply", id: worker.postedMessages.at(-1).id, status: "error", error: "disk full; worker retained" });
+    await expect(first).rejects.toThrow("worker retained"); expect(worker.terminate).not.toHaveBeenCalled();
+    const second = proxy.stop({ drain: false, timeoutMs: 1000 });
+    await vi.waitFor(() => expect(worker.postedMessages.filter(m => m.command === "closePublisher")).toHaveLength(2));
+    worker.emit("message", { command: "publishQueueReply", id: worker.postedMessages.at(-1).id, status: "success" });
+    await second; expect(worker.terminate).toHaveBeenCalledOnce();
+  });
+  it("bounds pre-worker admission when no legacy maxPendingPublishes was selected", async () => {
+    const proxy = proxyWithQueue(), worker = getLastWorker();
+    const one = proxy.publishMessage("a", "1"), two = proxy.publishMessage("a", "2");
+    const rejectedOne = expect(one).rejects.toThrow(), rejectedTwo = expect(two).rejects.toThrow();
+    await expect(proxy.publishMessage("a", "3")).rejects.toThrow("full");
+    worker.emit("error", new Error("test worker exited")); await Promise.all([rejectedOne,rejectedTwo]);
+  });
+  it("reports only cached operator-safe output queue metadata", () => {
+    const proxy = proxyWithQueue(), worker = getLastWorker(); expect(proxy.getPublishQueueStatus()).toBeUndefined();
+    const status = { mode: "durable", state: "pending", pendingRecords: 2, pendingBytes: 30, memoryRecords: 0,
+      diskRecords: 2, inFlight: false, retries: 0, delivered: 0, lastError: null };
+    worker.emit("message", { command: "publishQueueStatus", status }); expect(proxy.getPublishQueueStatus()).toEqual(status);
+  });
+});

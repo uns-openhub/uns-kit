@@ -213,6 +213,9 @@ class UnsProxyProcess {
     handover: boolean,
     unsParameters?: IUnsParameters,
   ): Promise<UnsMqttProxy> {
+    if (unsParameters?.publishQueue && handover) {
+      throw new Error("Persistent MQTT output requires handover=false and one owner; legacy RAM handover does not transfer an outbox");
+    }
     // Wait until the MQTT connection is established before proceeding.
     await this.waitForProcessConnection();
 

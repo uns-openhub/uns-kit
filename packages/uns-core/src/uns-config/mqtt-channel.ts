@@ -8,6 +8,7 @@ import type {
 /** A config-file MQTT channel before its optional override is merged with infra. */
 export type MqttChannelConfig = Pick<
   IMqttParameters,
+  | "publishQueue"
   | "username"
   | "password"
   | "clientId"
@@ -75,6 +76,9 @@ export function resolveMqttChannel(
       setChannelField(resolved, field, cloneChannelValue(value));
     }
   }
+
+  // Outbox ownership is output-local, never inherited from infra/control traffic.
+  if (override?.publishQueue !== undefined) resolved.publishQueue = cloneChannelValue(override.publishQueue) as IMqttParameters["publishQueue"];
 
   const infraProperties = infra.properties;
   const overrideProperties = override?.properties;

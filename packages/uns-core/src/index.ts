@@ -46,3 +46,6 @@ export type {
   RuntimeServiceRegistration,
   RuntimeServiceRegistrationClient,
 } from "./tools/datahub/runtime-service-registration.js";
+
+export { mqttPublishQueueSchema } from "./uns-mqtt/publish-queue-contract.js";
+export type { MqttPublishQueueOptions, MqttPublishQueueStatus } from "./uns-mqtt/publish-queue-contract.js";

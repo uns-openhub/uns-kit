@@ -1,5 +1,6 @@
 // src/uns-config/uns-core-schema.ts
 import { z } from "zod";
+import { mqttPublishQueueSchema } from "../uns-mqtt/publish-queue-contract.js";
 
 import { hostValueSchema } from "./host-placeholders.js";
 import { secretValueSchema } from "./secret-placeholders.js";
@@ -91,6 +92,11 @@ export const mqttChannelSchema = z
     },
   );
 
+/** Publishing options belong to output, never to the infra/control or input channel. */
+export const mqttOutputChannelSchema = mqttChannelSchema.extend({
+  publishQueue: mqttPublishQueueSchema.optional().describe("Opt-in MQTT output persistence; does not persist input subscriptions."),
+}).strict();
+
 export const unsCoreSchema = z
   .object({
     uns: z
@@ -122,7 +128,7 @@ export const unsCoreSchema = z
       .optional(),
 
     input: mqttChannelSchema.optional(),
-    output: mqttChannelSchema.optional(),
+    output: mqttOutputChannelSchema.optional(),
     infra: mqttChannelSchema,
     devops: z
       .object({

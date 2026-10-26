@@ -113,6 +113,20 @@ export interface ProjectAppConfig {
         cert?: string | undefined;
         key?: string | undefined;
         servername?: string | undefined;
+        /** Opt-in MQTT output persistence; does not persist input subscriptions. */
+        publishQueue?: {
+            mode: "buffered" | "durable";
+            directory: string;
+            maxRecords?: number;
+            maxBytes?: number;
+            memoryRecords?: number;
+            memoryBytes?: number;
+            maxMessageBytes?: number;
+            maxDiskBytes?: number;
+            minFreeBytes?: number;
+            retryIntervalMs?: number;
+            publishTimeoutMs?: number;
+        } | undefined;
     } | undefined;
     infra: {
         host?: string | undefined;
