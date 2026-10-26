@@ -24,6 +24,8 @@ Pointers for AI/code-assist tools when working in this generated project.
 
 ## UNS Kit dependency upgrades
 
+- When crossing `<3.0.29` to `>=3.0.29`, configuration-owned process groups opt into shared protocol2/policy4. Keep business resources in the app, bind immutable snapshots and journal generations, use reviewed generation/version transitions, and preserve old journals/policies. Ordinary services and existing file groups need no migration.
+
 - Before changing any `@uns-kit/*` version, record the installed source version and intended target version.
 - After installing the target version, read `node_modules/@uns-kit/core/MIGRATIONS.md` and apply every migration whose version boundary is crossed. Do not apply unrelated migrations.
 - When a project configuration stores database connection values as environment or Infisical references, use `secretValueSchema` for those fields and regenerate `config.schema.json`; retain normal string schemas for non-secret settings.

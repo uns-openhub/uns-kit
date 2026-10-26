@@ -1,10 +1,11 @@
 import { isUnsupportedLegacyReceiver } from "./compatibility/energenti-descriptor-v1.js";
-import { type ProcessGroupRuntimeDescriptor, isLocalPilotPath, normalizeProcessGroupConfiguration } from "./process-group-contract.js";
+import { isLocalPilotPath } from "./process-group-contract.js";
+import { type RuntimeGroupDescriptor, normalizeRuntimeProcessGroup } from "./process-group-runtime-selection.js";
 
 /** SDK receiver contract; host launchers translate these neutral settings to PM2/systemd. */
 export function processGroupReceiverSupervision(
   raw: Record<string, unknown>,
-  descriptor: ProcessGroupRuntimeDescriptor | undefined,
+  descriptor: RuntimeGroupDescriptor | undefined,
   instanceDirectory: string,
   capabilities: { supervised: boolean; persistent: boolean; authorized: boolean },
   supervisor: { enabled: boolean; restartOnExit: boolean; restartOnUnhealthy: boolean; maxMemoryMb?: number | null },
@@ -13,7 +14,7 @@ export function processGroupReceiverSupervision(
     if (isUnsupportedLegacyReceiver(raw)) throw Error("Installed package has no supported receiver contract");
     return {};
   }
-  const c = normalizeProcessGroupConfiguration(raw, descriptor);
+  const c = normalizeRuntimeProcessGroup(raw, descriptor);
   if (c.runtimeRole !== "admission") return {};
   if (!c.matches || !c.journal || (!isLocalPilotPath(instanceDirectory) && !capabilities.authorized))
     throw Error("Admission supervision requires an explicit reviewed journal instance");

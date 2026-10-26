@@ -3,6 +3,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import * as legacy from "./compatibility/energenti-authorization-v1.js";
+import { configurationGroupAuthorizationSchema, configurationGroupPolicyIdentity, verifyConfigurationGroupPolicy } from "./configuration-group-authorization.js";
 import {
   type ProcessGroupRuntimeDescriptor,
   normalizeProcessGroupConfiguration,
@@ -15,6 +16,7 @@ import {
   groupChannelsHash,
   readProcessGroupResource as read,
   sha256 as sha,
+  assertPrivateProcessGroupDirectory,
 } from "./process-group-resources.js";
 
 export { configurationAuthorizationHash, groupArtifactHash, groupChannelsHash } from "./process-group-resources.js";
@@ -74,6 +76,8 @@ interface GenericAuthorization {
   readonly groupId: string;
   readonly groupProcessName: string;
   readonly namespace: string;
+  readonly generationId?: string;
+  readonly configurationGroupSha256?: string;
 }
 export type ProcessGroupAuthorization = legacy.HvAuthorization | GenericAuthorization;
 export type HvAuthorization = ProcessGroupAuthorization;
@@ -81,11 +85,7 @@ export type HvAuthorizationPolicy = legacy.HvAuthorizationPolicy;
 export const hvAuthorizationSchema = legacy.hvAuthorizationSchema;
 export const productionGroupIds = legacy.productionGroupIds;
 const issued = new WeakSet<object>();
-function privateDirectory(dir: string): void {
-  for (let p = dir; p !== path.dirname(p); p = path.dirname(p)) if (fs.lstatSync(p).isSymbolicLink()) throw Error("Linked policy directory");
-  const s = fs.lstatSync(dir);
-  if (!s.isDirectory() || s.uid !== process.getuid?.() || (s.mode & 0o077) !== 0) throw Error("Insecure policy directory");
-}
+const privateDirectory = assertPrivateProcessGroupDirectory;
 function registryRoot(root: string, dir: string): string {
   if (!path.isAbsolute(root) || path.resolve(root) !== root || path.resolve(dir) !== dir) throw Error("Invalid policy registry");
   privateDirectory(root);
@@ -98,6 +98,21 @@ function registryRoot(root: string, dir: string): string {
   return relative.split("/")[0]!;
 }
 function selectedFile(pkg: string, raw: Record<string, unknown>, root: string, explicit?: string): string {
+  const configured = configurationGroupPolicyIdentity(pkg, raw);
+  if (configured) {
+    if (explicit) return explicit;
+    const directory = process.env["UNS_PROCESS_GROUP_AUTHORIZATION_DIRECTORY"];
+    if (directory) {
+      const selected = registryRoot(root, directory);
+      if (selected !== "*" && selected !== configured.namespace) throw Error("Foreign runtime registry");
+      const registry = selected === "*" ? path.join(root, configured.namespace, "authorizations") : directory;
+      privateDirectory(registry);
+      return path.join(registry, configured.generationId + ".json");
+    }
+    const single = process.env["UNS_PROCESS_GROUP_AUTHORIZATION_FILE"];
+    if (!single) throw Error("No selected policy");
+    return single;
+  }
   const descriptor = processGroupDescriptor(pkg);
   if (!descriptor) throw Error("Missing runtime contract");
   const c = normalizeProcessGroupConfiguration(raw, descriptor),
@@ -182,10 +197,11 @@ export function configuredGroupProcessNames(): Set<string> {
     for (const file of files) {
       const raw = JSON.parse(read(file, true).toString());
       const p =
-        raw.schemaVersion === 3
+        raw.schemaVersion === 4 ? configurationGroupAuthorizationSchema.parse(raw) : raw.schemaVersion === 3
           ? processGroupAuthorizationSchema.parse(raw)
           : z.union([legacy.hvAuthorizationSchema, legacy.processGroupAuthorizationSchema]).parse(raw);
-      const { namespace, group } = p.schemaVersion === 3 ? { namespace: p.namespace, group: p.groupId } : legacy.legacyPolicyIdentity(p);
+      const { namespace, group } = p.schemaVersion === 4 ? { namespace: p.namespace, group: p.generationId }
+        : p.schemaVersion === 3 ? { namespace: p.namespace, group: p.groupId } : legacy.legacyPolicyIdentity(p);
       if (
         p.stateRoot !== root ||
         file !== path.join(root, namespace, "authorizations", group + ".json") ||
@@ -218,6 +234,11 @@ function verifyRuntimePolicy(context: ProcessGroupAuthorizationContext, candidat
     const file = selectedFile(context.packageRoot, context.rawConfiguration, root, context.file),
       bytes = candidate ?? read(file, true),
       unparsed = JSON.parse(bytes.toString());
+    if (unparsed.schemaVersion === 4) {
+      const result = verifyConfigurationGroupPolicy(context, bytes, root, file);
+      if (!candidate) issued.add(result);
+      return result;
+    }
     if (unparsed.schemaVersion !== 3) {
       if (candidate) throw Error("Only generic policies can be staged");
       return legacy.authorizeHvRuntime({ ...context, file, stateRoot: root });
@@ -362,7 +383,7 @@ export function assertProcessGroupStateMount(value: ProcessGroupAuthorization, r
     return;
   }
   assertProcessGroupJournalAuthorization(value, value.directory, value.journalId ?? undefined);
-  if (process.platform !== "linux" || !("namespace" in value) || value.directory !== path.join(root, value.namespace, "admission", value.groupId))
+  if (process.platform !== "linux" || !("namespace" in value) || value.directory !== path.join(root, value.namespace, "admission", value.generationId ?? value.groupId))
     throw Error("Process group requires its reviewed Linux state mount");
   const mount = fs
     .readFileSync("/proc/self/mountinfo", "utf8")
@@ -398,6 +419,8 @@ export function assertProcessGroupTargetLaunch(
       !digest.safeParse(r.configurationChecksum).success
     )
       throw Error();
+    if ("configurationGroupSha256" in value && value.configurationGroupSha256 !== undefined &&
+      (r.configurationGroupSha256 !== value.configurationGroupSha256 || r.generationId !== value.generationId)) throw Error();
   } catch {
     throw Error("Target requires its exact reviewed group reservation and launch identity");
   }

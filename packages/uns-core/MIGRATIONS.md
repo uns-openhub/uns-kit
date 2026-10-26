@@ -9,6 +9,75 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.29 - Optional configuration resources and reviewed journal transitions
+
+Release preparation: source/packaged local acceptance is complete; npm publication
+is a separate owner-operated step. These APIs are not in registry3.0.28.
+
+When crossing `<3.0.29` to `>=3.0.29`, existing applications and file policies need
+no migration. Opt-in applications can declare `processGroupConfigurationRuntime`
+protocol2 and use `runtime/configuration-group-contract.js`, immutable opaque JSON
+resources, journal contract2 and policy schema4. Applications own business validation;
+SDK owns common validation/hash/identity rules; hosts own authenticated review,
+durable operations and launch control. Never add named-application lifecycle code.
+
+Use `configurationGroupSnapshot` to bind plain JSON resources and retain its SDK-issued
+proof. Validate the resolved application resources against the authorized raw snapshot.
+Keep runtime group snapshots immutable. No mapping, unit or topic is inferred by the
+host. See [the configuration guide](https://github.com/uns-openhub/uns-kit/blob/master/docs/process-group-configuration-runtime.md)
+and [worked unrelated adapter example](https://github.com/uns-openhub/uns-kit/blob/master/docs/examples/configuration-process-group.md).
+
+Keep file protocol1/policy3 and frozen historical policies1/2 unchanged. New journals
+store profile bindings as `{processName, resourceSha256, dataGroup}`. Host inspection,
+reservations, staging, supervision and standalone snapshots understand both formats;
+ordinary undeclared Node/Python services retain their current behavior. Hosts must
+pin group/generation in configured launch reservations and share these helpers rather
+than reconstruct the validation or execute application JavaScript.
+
+### Resource changes require separate generations
+
+The paired management envelope stays protocol1. Its nested protocol2 input reviews
+four placements, separate source/target journals and explicit input-pause,
+resource-review and possible-broker-replay acknowledgements. Use the shared
+`process-group-generation.js` review; stop receiver first, finish admitted old work,
+prove publisher exit, then launch the reviewed new receiver and publisher. Rollback
+symmetrically drains the successor generation before restoring the old pair.
+
+Never relabel an old journal or reinterpret pending payloads, even when it is empty.
+UUIDs, contracts, checkpoints and canonical policies remain separate and retained.
+Unknown initialization/stop/start outcomes require reconciliation of the same durable
+operation. Do not initialize a replacement journal or retry an unconfirmed launch.
+See [generation preparation and limits](https://github.com/uns-openhub/uns-kit/blob/master/docs/process-group-generations.md).
+
+### Version changes can retain an unchanged generation
+
+`reviewInstalledProcessGroupUpgrade` supports file groups and configured pairs through
+the existing nested protocol1 version input. Configured review adds `retainedJournal`
+(contract2); all resources, process/profile/input/broker identities, capacity,
+journal directory/UUID and generation must stay unchanged. A resource change belongs
+to the separate-generation path. No initializer runs during this version-only step.
+
+The SDK validates staged schema4 target policy data without issuing live authority.
+After both prior owners have proven clean exits, the host compares/swaps the canonical
+policy and starts receiver before publisher with one-use launch identities. Both old
+and new policy byte snapshots remain available for rollback; pending records and
+completed checkpoints stay valid in that same journal. Recheck its integrity before
+policy replacement and launch. See [paired-version guide and request example](https://github.com/uns-openhub/uns-kit/blob/master/docs/process-group-version-upgrade.md).
+
+### Packaging and limits
+
+Local Linux acceptance covers pending tasks, interruption, lost response, same-operation
+reconciliation, exact outputs and rollback. The shared snapshot reader accepts journal
+contracts1/2 and verifies resource/checkpoint bindings; sync native helpers from the
+exact installed SDK asset/version/hash. Existing backup bounds remain9 journals total,
+unique flat snapshot group identifiers across namespaces, and archiver spool exclusion.
+
+Publish the coordinated SDK before pinning downstream registry versions/lockfiles;
+keep Zod resolution compatible and regenerate schemas/typecheck from frozen installs.
+Hosts/helpers require their own compatible releases. This does not authorize a
+production rollout, cross-host queue transfer, exactly-once output, automatic unknown
+outcome resolution or recovery of MQTT input never admitted by the receiver.
+
 ## 3.0.28 - Paired process-group version upgrades
 
 When crossing `<3.0.28` to `>=3.0.28`, shared schemas and installed-resource review support a

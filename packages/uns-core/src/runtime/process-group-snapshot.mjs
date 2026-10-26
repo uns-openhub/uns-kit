@@ -148,7 +148,45 @@ for (const namespace of namespaces) {
       if (!/^[0-9a-f-]{36}$/.test(meta.id ?? "")) fail();
       const contract = JSON.parse(meta.contract);
       const profiles = snap.prepare("SELECT name,contract,completed,last_seq FROM profiles ORDER BY name").all();
-      if (profiles.length < 1 || profiles.length > 19 || contract.version !== 1 || contract.profiles.length !== profiles.length) fail();
+      if (
+        profiles.length < 1 ||
+        profiles.length > 19 ||
+        ![1, 2].includes(contract.version) ||
+        !Array.isArray(contract.profiles) ||
+        contract.profiles.length !== profiles.length
+      )
+        fail();
+      if (contract.version === 2) {
+        if (
+          contract.generationId !== group ||
+          !/^[a-f0-9]{64}$/.test(contract.groupSha256 ?? "") ||
+          !/^[a-f0-9]{64}$/.test(contract.sourceIdentity ?? "") ||
+          profiles.length < 2 ||
+          profiles.length > 16 ||
+          new Set(contract.profiles.map((p) => p.processName)).size !== profiles.length ||
+          !Number.isSafeInteger(contract.maxRecords) ||
+          contract.maxRecords < 1 ||
+          contract.maxRecords > 100000 ||
+          !Number.isSafeInteger(contract.maxBytes) ||
+          contract.maxBytes < 1024 ||
+          contract.maxBytes > 256 * 1024 * 1024
+        )
+          fail();
+        for (const row of profiles) {
+          const binding = JSON.parse(row.contract),
+            expected = contract.profiles.find((p) => p.processName === row.name);
+          if (
+            !expected ||
+            !/^[a-z][a-z0-9-]{0,99}$/.test(row.name) ||
+            !/^[a-f0-9]{64}$/.test(expected.resourceSha256 ?? "") ||
+            !/^[a-z][a-z0-9-]{0,99}$/.test(expected.dataGroup ?? "") ||
+            binding.processName !== row.name ||
+            binding.resourceSha256 !== expected.resourceSha256 ||
+            binding.dataGroup !== expected.dataGroup
+          )
+            fail();
+        }
+      }
       const usage = snap.prepare("SELECT records,bytes,admitted FROM usage WHERE id=1").get();
       const actual = snap.prepare("SELECT count(*) records,coalesce(sum(bytes),0) bytes FROM tasks").get();
       if (
@@ -162,6 +200,9 @@ for (const namespace of namespaces) {
       info = {
         group,
         namespace,
+        ...(contract.version === 2
+          ? { journalContractVersion: 2, generationId: contract.generationId, configurationGroupSha256: contract.groupSha256 }
+          : {}),
         journalId: meta.id,
         clientId: namespace + "-admission-" + meta.id,
         contractSha256: hash(meta.contract),

@@ -273,6 +273,16 @@ and apply only the migrations whose version boundaries are crossed. The
 `3.0.0` migration documents the MQTT table-column object contract, while the
 `2.0.71` migration documents MQTT publish and shutdown ownership changes.
 
+## Optional configuration-owned process groups
+
+Version3.0.29 adds optional shared contracts for immutable application-owned JSON
+resources, reviewed journal generations and same-generation paired version upgrades.
+Existing file groups and ordinary services need no migration. Applications validate
+business resources; hosts enforce authenticated durable lifecycle operations.
+See the [guide and example](https://github.com/uns-openhub/uns-kit/blob/master/docs/process-group-configuration-runtime.md)
+and the3.0.29 entry in `MIGRATIONS.md`. Source preparation is not npm publication or
+production activation.
+
 ## Sync UNS schema from the controller
 
 `sync-uns-schema` fetches the canonical UNS dictionary and measurements from the controller REST API and refreshes local JSON files and generated TypeScript artifacts.

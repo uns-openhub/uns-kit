@@ -55,6 +55,7 @@ describe("uns-kit create --bundle", () => {
     expect(agents).toContain("node_modules/@uns-kit/core/MIGRATIONS.md");
     expect(agents).toContain("When crossing `<2.0.71` to `>=2.0.71`");
     expect(agents).toContain("When crossing `<3.0.7` to `>=3.0.7`");
+    expect(agents).toContain("When crossing `<3.0.29` to `>=3.0.29`");
     expect(agents).toContain("pnpm build");
 
     const packageJson = JSON.parse(await readFile(path.join(targetDir, "package.json"), "utf8")) as {

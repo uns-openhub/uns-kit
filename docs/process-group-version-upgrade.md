@@ -33,7 +33,8 @@ The new SDK functions live in `@uns-kit/core/runtime/process-group-upgrade.js`:
 `validateProcessGroupPolicyCandidate` reviews a proposed generic policy without
 issuing runtime authority. Actual startup still reads the active canonical policy
 and requires an exact operation reservation and launch identity. Historical policy
-readers stay frozen; a compatible new artifact uses schema 3.
+readers stay frozen; a compatible file-based artifact uses schema 3. Configuration-owned
+protocol-2 groups use schema4 in the prepared SDK3.0.29 extension described below.
 
 ## Host procedure
 
@@ -95,3 +96,35 @@ Outage before MQTT admission can lose source data when the broker does not retai
 it. Accepted journal entries survive the paired upgrade/rollback, but output replay
 can be at least once. No exactly-once guarantee or automatic resolution of unknown
 launch outcomes is implied. Standalone signal/drain behavior remains application-owned.
+
+## Configuration-owned resources
+
+The same nested version input (`protocolVersion: 1`) and paired host procedure also
+support installed `processGroupConfigurationRuntime` declarations. This is not a
+resource revision: the two versions must select the exact same group snapshot,
+opaque resource hashes, profile/process/input identities, resolved broker identities,
+journal capacity, directory, UUID and generation. Both source and target roles must
+agree. Any changed resource, generation or unrelated portable configuration requires
+its own review; use [separate generations](process-group-generations.md) for resource
+changes. No initializer should be called during a version-only upgrade.
+
+`reviewInstalledProcessGroupUpgrade` selects the appropriate shared data-only
+verifier. A configured review retains outer review `protocolVersion: 1` and adds
+`retainedJournal` (contractVersion2) with the immutable journal reference. The host
+binds that same `groupSha256`/`generationId` into **all four** launch reservations,
+and rechecks the journal before policy replacement and startup. Pending records and
+completed checkpoints are permitted and are not a pristine/new-generation test.
+
+The SDK stages a proposed schema4 policy for the target artifact and exact target
+pair. The single canonical generation policy is changed only by the authenticated
+host after both prior owners have proven clean exits. Both policy byte snapshots
+remain available for rollback; compare-and-swap is idempotent after a lost reply.
+Same journal UUID means the receiver keeps the same application-owned MQTT client
+identity. Broker behavior remains separately configured; this is not an exactly-once
+claim. The example request above needs no application-specific fields.
+
+Validation includes two unrelated adapters with flat/nested selectors, pending work,
+policy rollback and rejection of resource/input/profile/UUID/generation/broker changes.
+The complete local Controller/Linux acceptance and exact limits are recorded in the
+private Controller repository; registry publication and issued-artifact tests remain
+separate release gates.

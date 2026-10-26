@@ -43,6 +43,12 @@ recovery rules, see
 For opt-in reviewed process consolidation in core 3.0.27, see the
 [process-group protocol guide](docs/process-group-runtime.md) and its
 [worked application example](docs/examples/process-group-runtime.md).
+For optional configuration-owned resources prepared in3.0.29, see the
+[configuration guide](docs/process-group-configuration-runtime.md),
+[independent adapter example](docs/examples/configuration-process-group.md),
+[reviewed resource generations](docs/process-group-generations.md) and
+[same-journal paired version upgrades](docs/process-group-version-upgrade.md).
+SDK npm publication, compatible host/helper releases and deployment are separate.
 For the active cross-repository migration of MQTT table columns from arrays to
 named objects, see
 [`docs/mqtt-table-columns-object-migration-plan.md`](docs/mqtt-table-columns-object-migration-plan.md).

@@ -44,5 +44,7 @@ jobs:
       - run: pnpm run ts:build
       - run: pnpm run ts:pack:check
       - run: pnpm exec vitest run tests/api-package-boundary.test.ts
+      - run: pnpm exec vitest run tests/uns-cli-upgrade.test.ts tests/uns-cli-bundle-create.test.ts
       - run: pnpm exec vitest run tests/runtime/process-group-contract.test.ts tests/process-group-upgrade.test.ts
+      - run: pnpm exec vitest run tests/runtime/configuration-group-contract.test.ts tests/runtime/configuration-group-inspection.test.ts tests/runtime/process-group-generation.test.ts tests/runtime/process-group-configured-upgrade.test.ts
       - run: pnpm exec vitest run tests/subscription-readiness.test.ts tests/mqtt-proxy-logging.test.ts tests/mqtt-worker.test.ts tests/uns-mqtt-proxy.test.ts

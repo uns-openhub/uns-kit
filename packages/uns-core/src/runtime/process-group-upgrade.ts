@@ -1,3 +1,6 @@
+import { reviewInstalledConfigurationGroupUpgrade } from "./process-group-configured-upgrade.js";
+import { selectedProcessGroupDescriptor } from "./process-group-runtime-selection.js";
+import {processGroupGenerationInputSchema,type GroupGenerationReview,type GenerationJournalReference} from "./process-group-generation.js";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -28,7 +31,7 @@ import {
 } from "./process-group-resources.js";
 
 const pair = z.strictObject({ publisher: groupPlacementSchema, receiver: groupPlacementSchema });
-export const processGroupUpgradeInputSchema = z.strictObject({ protocolVersion: z.literal(1), source: pair, target: pair }).superRefine((v, c) => {
+const processGroupVersionUpgradeInputSchema = z.strictObject({ protocolVersion: z.literal(1), source: pair, target: pair }).superRefine((v, c) => {
   const all = [v.source.publisher, v.source.receiver, v.target.publisher, v.target.receiver];
   if (
     new Set(all.map(placementKey)).size !== 4 ||
@@ -39,6 +42,7 @@ export const processGroupUpgradeInputSchema = z.strictObject({ protocolVersion: 
   )
     c.addIssue({ code: "custom", message: "Four distinct placements, one package/controller and two paired versions required" });
 });
+export const processGroupUpgradeInputSchema=z.union([processGroupVersionUpgradeInputSchema,processGroupGenerationInputSchema]);
 export type ProcessGroupUpgradeInput = z.infer<typeof processGroupUpgradeInputSchema>;
 export type UpgradeRole = "publisher" | "receiver";
 export type UpgradeConfiguration = {
@@ -48,8 +52,10 @@ export type UpgradeConfiguration = {
   resolved: Record<string, unknown>;
 };
 export type UpgradeConfigurations = Record<"source" | "target", Record<UpgradeRole, UpgradeConfiguration>>;
-export type GroupUpgradeReview = {
+export type GroupVersionUpgradeReview = {
   protocolVersion: 1;
+  /** Present only for configuration-owned protocol-2 resources retained across a version change. */
+  retainedJournal?: GenerationJournalReference;
   namespace: string;
   groupId: string;
   policyFile: string;
@@ -61,6 +67,7 @@ export type GroupUpgradeReview = {
   profiles: Array<{ processName: string; mappingSha256: string; dataGroup: string }>;
   members: Array<{ side: "source" | "target"; role: UpgradeRole; processName: string; configurationSha256: string; artifactSha256: string }>;
 };
+export type GroupUpgradeReview = GroupVersionUpgradeReview | GroupGenerationReview;
 export type PreparedGroupUpgrade = { review: GroupUpgradeReview; sourcePolicy: Buffer; targetPolicy: Buffer };
 
 /** Data-only same-host version review. No application JS, journal writes or launch authority. */
@@ -70,6 +77,8 @@ export function reviewInstalledProcessGroupUpgrade(
   stateRoot: string,
   excludedUnsFields: readonly string[] = [],
 ): PreparedGroupUpgrade {
+  if (Object.values(configs).flatMap(Object.values).some(c => selectedProcessGroupDescriptor(c.packageRoot, c.raw)?.protocolVersion === 2))
+    return reviewInstalledConfigurationGroupUpgrade(configs, controllerName, stateRoot, excludedUnsFields);
   const first = configs.source.publisher;
   const context = (c: UpgradeConfiguration) => ({
     packageRoot: c.packageRoot,
@@ -274,7 +283,7 @@ export const processGroupUpgradeRequestSchema = z
   });
 export type ProcessGroupUpgradeRequest = z.infer<typeof processGroupUpgradeRequestSchema>;
 /** Shared journal observations; only PID/start identity and fresh capture prove readiness. */
-export function inspectProcessGroupUpgradeJournal(review: GroupUpgradeReview, publisherPid?: number, receiverPid?: number) {
+export function inspectProcessGroupUpgradeJournal(review: Pick<GroupVersionUpgradeReview,"directory"|"journalId"|"journalContractSha256"|"profiles">, publisherPid?: number, receiverPid?: number) {
   const file = path.join(review.directory, "admission.sqlite");
   if (fs.realpathSync(file) !== file) throw Error("Unsafe retained journal path");
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");

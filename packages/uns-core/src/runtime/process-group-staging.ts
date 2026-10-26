@@ -2,11 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { type ProcessGroupRuntimeDescriptor, normalizeProcessGroupConfiguration } from "./process-group-contract.js";
+import { configurationGroupJournalSchema } from "./configuration-group-contract.js";
+import { type RuntimeGroupDescriptor, normalizeRuntimeProcessGroup } from "./process-group-runtime-selection.js";
 
 export const stagedJournalFile = "process-group-staged-journal.json";
 /** An explicit, config-bound declaration, not permission to initialize or run. */
-export function refreshProcessGroupStagedJournal(instanceDir: string, stopped: boolean, descriptor: ProcessGroupRuntimeDescriptor | undefined): void {
+export function refreshProcessGroupStagedJournal(instanceDir: string, stopped: boolean, descriptor: RuntimeGroupDescriptor | undefined): void {
   const marker = path.join(instanceDir, stagedJournalFile);
   const configFile = path.join(instanceDir, "config.json");
   if (!fs.existsSync(configFile)) return;
@@ -14,13 +15,14 @@ export function refreshProcessGroupStagedJournal(instanceDir: string, stopped: b
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1024 * 1024) throw new Error("Staged configuration must be a bounded regular file.");
   const raw = fs.readFileSync(configFile);
   const config = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
-  const journal = descriptor
-    ? (normalizeProcessGroupConfiguration(config, descriptor).journal as { directory?: unknown; journalId?: unknown } | undefined)
-    : undefined;
+  const selected = descriptor ? normalizeRuntimeProcessGroup(config, descriptor) : undefined;
+  const journal = selected?.journal as { directory?: unknown; journalId?: unknown } | undefined;
   if (!stopped || !journal || journal.journalId !== undefined) {
     fs.rmSync(marker, { force: true });
     return;
   }
+  if (selected?.configurationSnapshot && configurationGroupJournalSchema.parse(journal).groupSha256 !== selected.configurationSnapshot.sha256)
+    throw Error("Staged journal differs from its configured resource snapshot");
   if (typeof journal.directory !== "string" || !path.isAbsolute(journal.directory) || path.normalize(journal.directory) !== journal.directory)
     throw new Error("Staged journal requires a normalized absolute directory.");
   // Existing/unknown data must never be declared uninitialized, including links.

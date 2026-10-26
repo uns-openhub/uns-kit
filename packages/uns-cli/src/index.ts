@@ -660,6 +660,7 @@ const AGENT_MIGRATION_END = "<!-- uns-kit:migrations:end -->";
 const AGENT_MIGRATION_BLOCK = [
   AGENT_MIGRATION_START,
   "## UNS Kit dependency upgrades",
+  "- When crossing `<3.0.29` to `>=3.0.29`, configuration-owned process groups opt into shared protocol2/policy4. Keep business resources in the app, bind immutable snapshots and journal generations, use reviewed generation/version transitions, and preserve old journals/policies. Ordinary services and existing file groups need no migration.",
   "- When crossing `<3.0.27` to `>=3.0.27`, reviewed process-group runtimes and host launchers must use the shared runtime contract and data-only package descriptor; keep application names, mappings and group lists out of the Controller. Legacy policies remain frozen compatibility readers.",
   "",
   "- Before changing any `@uns-kit/*` version, record the installed source version and intended target version.",

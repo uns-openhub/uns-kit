@@ -5,12 +5,19 @@ import path from "node:path";
 import { z } from "zod";
 
 import {
+  configurationGroupJournalContract,
+  configurationGroupJournalSchema,
+  configurationResourceHash,
+  selectedConfigurationGroup,
+} from "./configuration-group-contract.js";
+import {
   assertProcessGroupStateMount,
   authorizeConfiguredProcessGroupRuntime,
   configurationAuthorizationHash,
   hasProcessGroupAuthorization,
   processGroupManifestSchema as manifest,
 } from "./process-group-authorization.js";
+import { readConfigurationSelector } from "./process-group-contract.js";
 import {
   isLocalPilotPath,
   isProcessGroupJournalPath,
@@ -24,6 +31,8 @@ import {
 } from "./process-group-contract.js";
 
 export interface ProcessGroupConfigurationEvidence {
+  configurationGroupSha256?: string;
+  generationId?: string;
   processName: string;
   configurationChecksum: string;
   projectionChecksum: string;
@@ -67,6 +76,8 @@ export function inspectProcessGroupConfiguration(
   options: { configurationChecksum(raw: string): string | null; excludedUnsFields: readonly string[] },
 ): ProcessGroupConfigurationEvidence {
   const original = JSON.parse(raw);
+  const configured = selectedConfigurationGroup(pkg, original);
+  if (configured) return inspectConfigurationGroup(pkg, dir, raw, original, configured, controllerName, options);
   const descriptor = processGroupDescriptor(pkg);
   if (!descriptor) throw Error("Installed package has no supported process-group contract");
   const c = normalizeProcessGroupConfiguration(original, descriptor),
@@ -110,46 +121,11 @@ export function inspectProcessGroupConfiguration(
     if (path.isAbsolute(admission.groupManifest) || admission.groupManifest.includes(".."))
       throw Error("Admission manifest must be package-relative");
     const admitted = manifest.parse(JSON.parse(resource(pkg, dir, admission.groupManifest).toString()));
-    for (let parent = admission.directory; parent !== path.dirname(parent); parent = path.dirname(parent))
-      if (fs.lstatSync(parent).isSymbolicLink()) throw Error("Admission directory cannot use symbolic links");
-    const databaseFile = path.join(admission.directory, "admission.sqlite");
-    if (fs.lstatSync(databaseFile).isSymbolicLink()) throw Error("Admission journal cannot use symbolic links");
-    const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
-    const journal = new DatabaseSync(databaseFile, { readOnly: true });
-    try {
-      journal.exec("PRAGMA busy_timeout=1000");
-      if (persistent && journal.prepare("SELECT value FROM metadata WHERE key='id'").get()?.["value"] !== admission.journalId)
-        throw Error("Persistent admission journalId binding differs");
-      const input = resolvedProcessGroupInputChannel(original);
-      const sourceIdentity = processGroupSourceIdentity(input);
-      const expected = processGroupJournalContract(sourceIdentity, admission, admitted.profiles);
-      const contract = journal.prepare("SELECT value FROM metadata WHERE key='contract'").get()?.["value"];
-      if (contract !== expected) throw Error("Durable admission journal contract differs");
-      const capture = JSON.parse(String(journal.prepare("SELECT value FROM metadata WHERE key='capture'").get()?.["value"] ?? "null"));
-      if (
-        !capture ||
-        !["ready", "capacity-blocked"].includes(capture.state) ||
-        !Number.isSafeInteger(capture.pid) ||
-        capture.pid <= 0 ||
-        !Number.isSafeInteger(capture.heartbeat) ||
-        Date.now() - capture.heartbeat > 5000 ||
-        capture.heartbeat > Date.now() + 1000
-      )
-        throw Error("Durable admission receiver is not ready");
-      process.kill(capture.pid, 0);
-      if (persistent) {
-        const namespace = sha(
-          Buffer.from(fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() + ":" + fs.readlinkSync("/proc/self/ns/pid")),
-        );
-        const stored = journal.prepare("SELECT value FROM metadata WHERE key='runtime_namespace'").get()?.["value"];
-        const stat = fs.readFileSync(`/proc/${capture.pid}/stat`, "utf8");
-        const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
-        if (stored !== namespace || !start || capture.runtimeIdentity !== sha(Buffer.from(namespace + ":" + capture.pid + ":" + start)))
-          throw Error("Admission capture namespace or process identity differs");
-      }
-    } finally {
-      journal.close();
-    }
+    inspectJournal(
+      admission,
+      persistent,
+      processGroupJournalContract(processGroupSourceIdentity(resolvedProcessGroupInputChannel(original)), admission, admitted.profiles),
+    );
     if (publisher.groupManifest && publisher.groupManifest !== admission.groupManifest) throw Error("Admission and publisher manifests differ");
     if (!publisher.groupManifest) {
       const member = admitted.profiles.find((p) => p.processName === uns.processName);
@@ -207,5 +183,130 @@ export function inspectProcessGroupConfiguration(
       .max(100)
       .parse(publisher.dataGroup ?? descriptor.defaultDataGroup),
     contract: null,
+  };
+}
+
+/** Shared read-only receiver/journal evidence for both resource protocols. */
+function inspectJournal(admission: { directory: string; journalId?: string | undefined }, persistent: boolean, expected: string): void {
+  for (let parent = admission.directory; parent !== path.dirname(parent); parent = path.dirname(parent))
+    if (fs.lstatSync(parent).isSymbolicLink()) throw Error("Admission directory cannot use symbolic links");
+  const databaseFile = path.join(admission.directory, "admission.sqlite");
+  if (fs.lstatSync(databaseFile).isSymbolicLink()) throw Error("Admission journal cannot use symbolic links");
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+  const journal = new DatabaseSync(databaseFile, { readOnly: true });
+  try {
+    journal.exec("PRAGMA busy_timeout=1000");
+    if (persistent && journal.prepare("SELECT value FROM metadata WHERE key='id'").get()?.["value"] !== admission.journalId)
+      throw Error("Persistent admission journalId binding differs");
+    const contract = journal.prepare("SELECT value FROM metadata WHERE key='contract'").get()?.["value"];
+    if (contract !== expected) throw Error("Durable admission journal contract differs");
+    const capture = JSON.parse(String(journal.prepare("SELECT value FROM metadata WHERE key='capture'").get()?.["value"] ?? "null"));
+    if (
+      !capture ||
+      !["ready", "capacity-blocked"].includes(capture.state) ||
+      !Number.isSafeInteger(capture.pid) ||
+      capture.pid <= 0 ||
+      !Number.isSafeInteger(capture.heartbeat) ||
+      Date.now() - capture.heartbeat > 5000 ||
+      capture.heartbeat > Date.now() + 1000
+    )
+      throw Error("Durable admission receiver is not ready");
+    process.kill(capture.pid, 0);
+    if (persistent) {
+      const namespace = sha(
+        Buffer.from(fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() + ":" + fs.readlinkSync("/proc/self/ns/pid")),
+      );
+      const stored = journal.prepare("SELECT value FROM metadata WHERE key='runtime_namespace'").get()?.["value"];
+      const stat = fs.readFileSync(`/proc/${capture.pid}/stat`, "utf8");
+      const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+      if (stored !== namespace || !start || capture.runtimeIdentity !== sha(Buffer.from(namespace + ":" + capture.pid + ":" + start)))
+        throw Error("Admission capture namespace or process identity differs");
+    }
+  } finally {
+    journal.close();
+  }
+}
+
+function inspectConfigurationGroup(
+  pkg: string,
+  dir: string,
+  raw: string,
+  original: Record<string, unknown>,
+  selected: NonNullable<ReturnType<typeof selectedConfigurationGroup>>,
+  controllerName: string,
+  options: { configurationChecksum(raw: string): string | null; excludedUnsFields: readonly string[] },
+): ProcessGroupConfigurationEvidence {
+  const { descriptor: d, snapshot } = selected;
+  const uns = { ...(original["uns"] as Record<string, unknown>) };
+  const memberId = readConfigurationSelector(original, d.memberPath),
+    role = readConfigurationSelector(original, d.runtimeRolePath);
+  const member = memberId === undefined ? undefined : snapshot.profiles.find((p) => p.id === memberId);
+  if (
+    (memberId !== undefined && !member) ||
+    uns["processName"] !== (member?.processName ?? snapshot.group.processName) ||
+    (role !== undefined && role !== "publisher")
+  )
+    throw Error("Configured publisher role or identity differs");
+  const journal = configurationGroupJournalSchema
+    .extend({
+      minFreeBytes: configurationGroupJournalSchema.shape.minFreeBytes.unwrap().optional(),
+      maxRecords: configurationGroupJournalSchema.shape.maxRecords.unwrap(),
+      maxBytes: configurationGroupJournalSchema.shape.maxBytes.unwrap(),
+    })
+    .parse(readConfigurationSelector(original, d.journalPath));
+  const production =
+    !isLocalPilotPath(pkg) || hasProcessGroupAuthorization() ? authorizeConfiguredProcessGroupRuntime(pkg, dir, original, controllerName) : undefined;
+  const persistent = !isLocalPilotPath(journal.directory);
+  if (production) assertProcessGroupStateMount(production, process.env["UNS_PROCESS_GROUP_STATE_ROOT"] ?? "");
+  if (path.resolve(journal.directory) !== journal.directory || (production && !persistent)) throw Error("Configured journal storage differs");
+  if (persistent && (!production || !journal.journalId)) throw Error("Persistent configured journal requires exact reviewed authority and UUID");
+  const metadata = JSON.parse(resource(pkg, dir, "package.json").toString()).unsDatahub;
+  if (metadata?.processGroupAdmission !== 1 || (persistent && metadata?.processGroupPersistentAdmission !== 1))
+    throw Error("Required journal capabilities missing");
+  const expected = configurationGroupJournalContract(
+    snapshot,
+    processGroupSourceIdentity(resolvedProcessGroupInputChannel(original)),
+    configurationGroupJournalSchema.parse(journal),
+    snapshot.profiles.map(({ processName, resourceSha256, dataGroup }) => ({ processName, resourceSha256, dataGroup })),
+  );
+  inspectJournal(journal, persistent, expected);
+  const checksum = options.configurationChecksum(raw);
+  if (!checksum) throw Error("Invalid configured group configuration");
+  for (const key of [...options.excludedUnsFields, "processName", "instanceMode", "handover", "handoverProtocol"]) delete uns[key];
+  const projection = structuredClone(original);
+  projection["uns"] = uns;
+  const remove = (keys: readonly string[]) => {
+    let node = projection;
+    for (const key of keys.slice(0, -1)) {
+      const child = node[key];
+      if (child === undefined) return;
+      if (!child || typeof child !== "object" || Array.isArray(child)) throw Error("Invalid selector projection");
+      node = child as Record<string, unknown>;
+    }
+    delete node[keys.at(-1)!];
+  };
+  remove(d.memberPath);
+  remove(d.runtimeRolePath);
+  if (production) projection["authorizationSha256"] = production.sha256;
+  return {
+    processName: String((original["uns"] as Record<string, unknown>)["processName"]),
+    configurationChecksum: checksum,
+    projectionChecksum: configurationResourceHash(projection),
+    configurationGroupSha256: snapshot.sha256,
+    generationId: journal.generationId,
+    mappingSha256: member?.resourceSha256 ?? null,
+    dataGroup: member?.dataGroup ?? null,
+    contract: member
+      ? null
+      : {
+          digest: snapshot.sha256,
+          processName: snapshot.group.processName,
+          profiles: snapshot.profiles.map(({ id, processName, resourceSha256, dataGroup }) => ({
+            id,
+            processName,
+            mappingSha256: resourceSha256,
+            dataGroup,
+          })),
+        },
   };
 }

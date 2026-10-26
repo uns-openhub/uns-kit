@@ -14,6 +14,12 @@ function canonical(v: unknown): unknown {
     : v;
 }
 export const configurationAuthorizationHash = (v: unknown): string => sha256(JSON.stringify(canonical(v)));
+export function assertPrivateProcessGroupDirectory(dir: string): void {
+  for (let p = dir; p !== path.dirname(p); p = path.dirname(p))
+    if (fs.lstatSync(p).isSymbolicLink()) throw Error("Linked policy directory");
+  const s = fs.lstatSync(dir);
+  if (!s.isDirectory() || s.uid !== process.getuid?.() || (s.mode & 0o077) !== 0) throw Error("Insecure policy directory");
+}
 export function readProcessGroupResource(file: string, privateFile = false): Buffer {
   if (file.length > 512 || path.resolve(file) !== file) throw Error("Process-group authorization resource path is not normalized");
   for (let p = file; p !== path.dirname(p); p = path.dirname(p))

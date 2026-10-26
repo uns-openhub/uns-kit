@@ -29,6 +29,7 @@ describe("uns-kit upgrade", () => {
     expect(firstAgents).toContain("When crossing `<2.0.71` to `>=2.0.71`");
     expect(firstAgents).toContain("When crossing `<3.0.0` to `>=3.0.0`");
     expect(firstAgents).toContain("When crossing `<3.0.7` to `>=3.0.7`");
+    expect(firstAgents).toContain("When crossing `<3.0.29` to `>=3.0.29`");
     expect(countOccurrences(firstAgents, "<!-- uns-kit:migrations:start -->")).toBe(1);
     expect(countOccurrences(firstAgents, "<!-- uns-kit:migrations:end -->")).toBe(1);
     const firstPackage = JSON.parse(await readFile(path.join(targetDir, "package.json"), "utf8"));
