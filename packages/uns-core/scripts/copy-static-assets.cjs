@@ -20,3 +20,6 @@ fs.mkdirSync(path.dirname(runtimeSnapshotDest),{recursive:true});
 fs.copyFileSync(runtimeSnapshotSource,runtimeSnapshotDest);
 
 fs.copyFileSync(path.resolve("src/runtime/process-group-backup-contract.json"),path.resolve("dist/runtime/process-group-backup-contract.json"));
+for (const asset of ['mqtt-output-state-program.mjs','mqtt-output-state-program.d.mts','mqtt-output-state-contract.json']) {
+  fs.copyFileSync(path.resolve('src/runtime',asset),path.resolve('dist/runtime',asset));
+}

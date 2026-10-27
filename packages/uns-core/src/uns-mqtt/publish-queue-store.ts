@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
+import { openManagedOutputRoot, validateOutputRow } from "../runtime/mqtt-output-state-program.mjs";
 import type { ResolvedMqttPublishQueueOptions } from "./publish-queue-contract.js";
 
 export type PublishRecord = { seq: number; id: string; topic: string; message: string; options: { qos: 1 | 2; retain: boolean }; bytes: number };
@@ -14,6 +15,7 @@ export class MqttPublishQueueStore {
   private db: DatabaseSync;
   private lease: DatabaseSync;
   private directory: string;
+  private managed?: ReturnType<typeof openManagedOutputRoot>;
   private finalSummary?: { records: number; bytes: number; lastSeq: number };
   constructor(
     private config: ResolvedMqttPublishQueueOptions,
@@ -21,27 +23,30 @@ export class MqttPublishQueueStore {
   ) {
     if (!path.isAbsolute(config.directory) || path.parse(config.directory).root === config.directory)
       throw Error("MQTT publish queue requires a dedicated absolute directory");
-    mkdirSync(config.directory, { recursive: true, mode: 0o700 });
-    const dir = lstatSync(config.directory);
-    if (!dir.isDirectory() || dir.isSymbolicLink() || dir.mode & 0o077 || (process.getuid && dir.uid !== process.getuid()))
-      throw Error("MQTT publish queue directory must be private and owned by this user");
-    this.directory = realpathSync(config.directory);
-    const file = path.join(this.directory, "mqtt-outbox.sqlite");
-    const leaseFile = path.join(this.directory, "mqtt-outbox-owner.sqlite");
-    for (const name of [leaseFile, file, file + "-wal", file + "-shm", leaseFile + "-journal"])
-      if (existsSync(name)) {
-        const stat = lstatSync(name);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.mode & 0o077 || (process.getuid && stat.uid !== process.getuid()))
-          throw Error("Unsafe MQTT publish queue file; preserve and inspect it");
-      }
-    // node:sqlite is loaded only for the opt-in path; ordinary publishers are unchanged.
-    const { DatabaseSync: Sqlite } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
-    const openPrivate = (name: string) => {
-      if (!existsSync(name)) closeSync(openSync(name, "wx", 0o600));
-      return new Sqlite(name);
-    };
-    this.lease = openPrivate(leaseFile);
+    if (config.storage === "runtime" && !process.env["UNS_MQTT_OUTPUT_STATE_ROOT"])
+      throw Error("Runtime MQTT output storage requires a reviewed permanent mount");
+    this.managed = config.storage === "runtime" ? openManagedOutputRoot(config.directory, process.env["UNS_MQTT_OUTPUT_STATE_ROOT"]) : undefined;
     try {
+      mkdirSync(config.directory, { recursive: true, mode: 0o700 });
+      const dir = lstatSync(config.directory);
+      if (!dir.isDirectory() || dir.isSymbolicLink() || dir.mode & 0o077 || (process.getuid && dir.uid !== process.getuid()))
+        throw Error("MQTT publish queue directory must be private and owned by this user");
+      this.directory = realpathSync(config.directory);
+      const file = path.join(this.directory, "mqtt-outbox.sqlite");
+      const leaseFile = path.join(this.directory, "mqtt-outbox-owner.sqlite");
+      for (const name of [leaseFile, file, file + "-wal", file + "-shm", leaseFile + "-journal"])
+        if (existsSync(name)) {
+          const stat = lstatSync(name);
+          if (!stat.isFile() || stat.isSymbolicLink() || stat.mode & 0o077 || (process.getuid && stat.uid !== process.getuid()))
+            throw Error("Unsafe MQTT publish queue file; preserve and inspect it");
+        }
+      // node:sqlite is loaded only for the opt-in path; ordinary publishers are unchanged.
+      const { DatabaseSync: Sqlite } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+      const openPrivate = (name: string) => {
+        if (!existsSync(name)) closeSync(openSync(name, "wx", 0o600));
+        return new Sqlite(name);
+      };
+      this.lease = openPrivate(leaseFile);
       this.lease.exec("PRAGMA busy_timeout=0; PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE");
       const existed = existsSync(file);
       if (existed) {
@@ -51,7 +56,11 @@ export class MqttPublishQueueStore {
             throw Error("Unsupported MQTT outbox page size; preserve and review storage");
           const meta = reader.prepare("SELECT value FROM metadata WHERE key=?");
           reader.prepare("SELECT seq,id,record,bytes,sha256 FROM pending LIMIT 1").get();
-          if (meta.get("schema")?.value !== "1" || meta.get("identity")?.value !== digest(identity))
+          if (
+            meta.get("schema")?.value !== (this.managed ? "2" : "1") ||
+            (this.managed && (meta.get("rootId")?.value !== this.managed.rootId || meta.get("relative")?.value !== this.managed.relative)) ||
+            meta.get("identity")?.value !== digest(identity)
+          )
             throw Error("MQTT outbox identity or schema differs; preserve pending work and use its original destination");
         } finally {
           reader.close();
@@ -66,7 +75,11 @@ export class MqttPublishQueueStore {
         CREATE TABLE IF NOT EXISTS pending(seq INTEGER PRIMARY KEY,id TEXT UNIQUE NOT NULL,record TEXT NOT NULL,bytes INTEGER NOT NULL,sha256 TEXT NOT NULL);`);
       if (!existed)
         this.transaction(() => {
-          this.db.prepare("INSERT INTO metadata VALUES(?,?)").run("schema", "1");
+          this.db.prepare("INSERT INTO metadata VALUES(?,?)").run("schema", this.managed ? "2" : "1");
+          if (this.managed) {
+            this.db.prepare("INSERT INTO metadata VALUES(?,?)").run("rootId", this.managed.rootId);
+            this.db.prepare("INSERT INTO metadata VALUES(?,?)").run("relative", this.managed.relative);
+          }
           this.db.prepare("INSERT INTO metadata VALUES(?,?)").run("identity", digest(identity));
         });
       const fd = openSync(this.directory, "r");
@@ -77,7 +90,8 @@ export class MqttPublishQueueStore {
       }
     } catch (error) {
       this.db?.close();
-      this.lease.close();
+      this.lease?.close();
+      this.managed?.close();
       throw error;
     }
   }
@@ -100,23 +114,9 @@ export class MqttPublishQueueStore {
   head(): PublishRecord | undefined {
     const row = this.db.prepare("SELECT seq,id,record,bytes,sha256 FROM pending ORDER BY seq LIMIT 1").get();
     if (!row) return undefined;
-    const serialized = String(row.record);
-    if (digest(serialized) !== row.sha256) throw Error("MQTT outbox integrity check failed; pending work preserved");
-    const value = JSON.parse(serialized) as PublishRecord;
-    if (
-      value.seq !== Number(row.seq) ||
-      value.id !== row.id ||
-      value.bytes !== Number(row.bytes) ||
-      !Number.isSafeInteger(value.seq) ||
-      typeof value.id !== "string" ||
-      typeof value.topic !== "string" ||
-      typeof value.message !== "string" ||
-      ![1, 2].includes(value.options?.qos) ||
-      typeof value.options.retain !== "boolean"
-    )
-      throw Error("Invalid MQTT outbox record; pending work preserved");
-    return value;
+    return validateOutputRow(row);
   }
+
   private physicalBytes(): number {
     return [
       "mqtt-outbox.sqlite",
@@ -165,6 +165,7 @@ export class MqttPublishQueueStore {
       this.db.close();
     } finally {
       this.lease.close();
+      this.managed?.close();
     }
   }
 }

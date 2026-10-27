@@ -4,6 +4,7 @@ import { z } from "zod";
 export const mqttPublishQueueSchema = z
   .object({
     mode: z.enum(["buffered", "durable"]),
+    storage: z.enum(["local", "runtime"]).default("local"),
     directory: z.string().min(1),
     maxRecords: z.number().int().min(1).max(100000).default(10000),
     maxBytes: z.number().int().min(1).max(536870912).default(67108864),

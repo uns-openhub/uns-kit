@@ -24,6 +24,8 @@ Pointers for AI/code-assist tools when working in this generated project.
 
 ## UNS Kit dependency upgrades
 
+- When crossing `<3.0.31` to `>=3.0.31`, ordinary services remain unchanged. Optional Runtime-managed MQTT outboxes require explicit `output.publishQueue.storage: runtime`, a trusted private per-Controller external mount and matching backup support. Preserve schema1 queues; restoring managed state requires a stopped source and an empty offline target. Read the version-bounded migration before enabling it.
+
 - When crossing `<3.0.29` to `>=3.0.29`, configuration-owned process groups opt into shared protocol2/policy4. Keep business resources in the app, bind immutable snapshots and journal generations, use reviewed generation/version transitions, and preserve old journals/policies. Ordinary services and existing file groups need no migration.
 
 - Before changing any `@uns-kit/*` version, record the installed source version and intended target version.

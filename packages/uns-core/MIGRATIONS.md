@@ -9,6 +9,24 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.31 - Explicit Runtime-managed MQTT outbox storage
+
+For an optional Runtime-managed MQTT outbox set `output.publishQueue.storage` to
+`runtime`, bind its literal two-component directory under the trusted
+`UNS_MQTT_OUTPUT_STATE_ROOT` mount, and provision private per-Controller external
+storage. Matching Controller/tools/helper support is required. Absence remains
+`local` and preserves schema 1. Older strict parsers reject the new setting;
+older stores reject managed schema 2. Never bypass this guard by removing fields.
+Existing queues are preserved; automatic schema 1 adoption is not implemented.
+
+Native backup helpers vendor the exact SDK data-only state program and finite
+contract with package/version/SHA receipts. Queue state is a separate signed and
+age-encrypted RTT capsule. Restoration requires an empty offline target and stopped
+source, retains the original identity and blocks application startup until complete.
+The ordinary RTT-only activation path refuses included queues. Buffered RAM is not
+included by live disk capture. See `docs/mqtt-output-runtime-state.md` for the two
+unrelated consumer examples, recovery sequence and delivery limits.
+
 ## 3.0.30 - Optional MQTT output buffering and durable admission
 
 When crossing `<3.0.30` to `>=3.0.30`, output persistence remains optional.

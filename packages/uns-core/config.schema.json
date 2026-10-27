@@ -1441,6 +1441,14 @@
                     "durable"
                   ]
                 },
+                "storage": {
+                  "default": "local",
+                  "type": "string",
+                  "enum": [
+                    "local",
+                    "runtime"
+                  ]
+                },
                 "directory": {
                   "type": "string",
                   "minLength": 1

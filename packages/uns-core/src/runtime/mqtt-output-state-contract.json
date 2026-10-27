@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "maximumQueues": 32,
+  "maximumRecordsPerQueue": 100000,
+  "maximumManifestBytes": 262144,
+  "maximumSnapshotBytes": 536870912,
+  "maximumCapsuleBytes": 1073741824
+}
