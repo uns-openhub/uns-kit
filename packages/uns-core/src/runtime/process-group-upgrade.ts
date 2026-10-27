@@ -1,6 +1,3 @@
-import { reviewInstalledConfigurationGroupUpgrade } from "./process-group-configured-upgrade.js";
-import { selectedProcessGroupDescriptor } from "./process-group-runtime-selection.js";
-import {processGroupGenerationInputSchema,type GroupGenerationReview,type GenerationJournalReference} from "./process-group-generation.js";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -13,6 +10,7 @@ import {
   processGroupManifestSchema,
   validateProcessGroupPolicyCandidate,
 } from "./process-group-authorization.js";
+import { reviewInstalledConfigurationGroupMqttOutput, reviewInstalledConfigurationGroupUpgrade } from "./process-group-configured-upgrade.js";
 import {
   normalizeProcessGroupConfiguration,
   processGroupDescriptor,
@@ -22,6 +20,13 @@ import {
   resolvedProcessGroupChannels,
 } from "./process-group-contract.js";
 import { groupPlacementSchema, placementKey } from "./process-group-control-contract.js";
+import { type GenerationJournalReference, type GroupGenerationReview, processGroupGenerationInputSchema } from "./process-group-generation.js";
+import {
+  type GroupMqttOutputReference,
+  mqttOutputPortableConfiguration,
+  processGroupMqttOutputInputSchema,
+  reviewProcessGroupMqttOutput,
+} from "./process-group-mqtt-output.js";
 import {
   groupArtifactHash,
   groupChannelsHash,
@@ -29,6 +34,7 @@ import {
   readProcessGroupResource as read,
   sha256,
 } from "./process-group-resources.js";
+import { selectedProcessGroupDescriptor } from "./process-group-runtime-selection.js";
 
 const pair = z.strictObject({ publisher: groupPlacementSchema, receiver: groupPlacementSchema });
 const processGroupVersionUpgradeInputSchema = z.strictObject({ protocolVersion: z.literal(1), source: pair, target: pair }).superRefine((v, c) => {
@@ -42,7 +48,11 @@ const processGroupVersionUpgradeInputSchema = z.strictObject({ protocolVersion: 
   )
     c.addIssue({ code: "custom", message: "Four distinct placements, one package/controller and two paired versions required" });
 });
-export const processGroupUpgradeInputSchema=z.union([processGroupVersionUpgradeInputSchema,processGroupGenerationInputSchema]);
+export const processGroupUpgradeInputSchema = z.union([
+  processGroupVersionUpgradeInputSchema,
+  processGroupGenerationInputSchema,
+  processGroupMqttOutputInputSchema,
+]);
 export type ProcessGroupUpgradeInput = z.infer<typeof processGroupUpgradeInputSchema>;
 export type UpgradeRole = "publisher" | "receiver";
 export type UpgradeConfiguration = {
@@ -67,7 +77,12 @@ export type GroupVersionUpgradeReview = {
   profiles: Array<{ processName: string; mappingSha256: string; dataGroup: string }>;
   members: Array<{ side: "source" | "target"; role: UpgradeRole; processName: string; configurationSha256: string; artifactSha256: string }>;
 };
-export type GroupUpgradeReview = GroupVersionUpgradeReview | GroupGenerationReview;
+export type GroupMqttOutputReview = Omit<GroupVersionUpgradeReview, "protocolVersion"> & {
+  protocolVersion: 3;
+  mqttOutput: GroupMqttOutputReference;
+  delivery: { inputPausePossible: true; exactlyOnceOutput: false; pendingOutputBlocksRollback: true };
+};
+export type GroupUpgradeReview = GroupVersionUpgradeReview | GroupGenerationReview | GroupMqttOutputReview;
 export type PreparedGroupUpgrade = { review: GroupUpgradeReview; sourcePolicy: Buffer; targetPolicy: Buffer };
 
 /** Data-only same-host version review. No application JS, journal writes or launch authority. */
@@ -77,8 +92,46 @@ export function reviewInstalledProcessGroupUpgrade(
   stateRoot: string,
   excludedUnsFields: readonly string[] = [],
 ): PreparedGroupUpgrade {
-  if (Object.values(configs).flatMap(Object.values).some(c => selectedProcessGroupDescriptor(c.packageRoot, c.raw)?.protocolVersion === 2))
-    return reviewInstalledConfigurationGroupUpgrade(configs, controllerName, stateRoot, excludedUnsFields);
+  return reviewRetainedProcessGroup(configs, controllerName, stateRoot, excludedUnsFields);
+}
+/** Explicit shared output capability. Ordinary upgrades keep their strict comparison. */
+export function reviewInstalledProcessGroupMqttOutput(
+  configs: UpgradeConfigurations,
+  controllerName: string,
+  stateRoot: string,
+  excludedUnsFields: readonly string[] = [],
+  outputRoot = process.env["UNS_MQTT_OUTPUT_STATE_ROOT"],
+): PreparedGroupUpgrade {
+  const mqttOutput = reviewProcessGroupMqttOutput(configs, outputRoot, stateRoot);
+  const result = reviewRetainedProcessGroup(configs, controllerName, stateRoot, excludedUnsFields, true);
+  return {
+    ...result,
+    review: {
+      ...result.review,
+      protocolVersion: 3,
+      mqttOutput,
+      delivery: { inputPausePossible: true, exactlyOnceOutput: false, pendingOutputBlocksRollback: true },
+    } as GroupMqttOutputReview,
+  };
+}
+function reviewRetainedProcessGroup(
+  configs: UpgradeConfigurations,
+  controllerName: string,
+  stateRoot: string,
+  excludedUnsFields: readonly string[],
+  mqttOutput = false,
+): PreparedGroupUpgrade {
+  if (
+    Object.values(configs)
+      .flatMap(Object.values)
+      .some((c) => selectedProcessGroupDescriptor(c.packageRoot, c.raw)?.protocolVersion === 2)
+  )
+    return (mqttOutput ? reviewInstalledConfigurationGroupMqttOutput : reviewInstalledConfigurationGroupUpgrade)(
+      configs,
+      controllerName,
+      stateRoot,
+      excludedUnsFields,
+    );
   const first = configs.source.publisher;
   const context = (c: UpgradeConfiguration) => ({
     packageRoot: c.packageRoot,
@@ -113,8 +166,8 @@ export function reviewInstalledProcessGroupUpgrade(
   if (manifest.id !== resource.id || journal.directory !== old.directory || journal.journalId !== old.journalId)
     throw Error("Journal or manifest identity changed");
   const members: GroupUpgradeReview["members"] = [];
-  const portable = (raw: Record<string, unknown>) => {
-    const copy = structuredClone(raw),
+  const portable = (raw: Record<string, unknown>, role: UpgradeRole) => {
+    const copy = mqttOutput ? mqttOutputPortableConfiguration(raw, role) : structuredClone(raw),
       uns = { ...(copy["uns"] as Record<string, unknown>) };
     for (const k of excludedUnsFields) delete uns[k];
     copy["uns"] = uns;
@@ -124,7 +177,7 @@ export function reviewInstalledProcessGroupUpgrade(
     const a = configs.source[role],
       b = configs.target[role];
     if (
-      portable(a.raw) !== portable(b.raw) ||
+      portable(a.raw, role) !== portable(b.raw, role) ||
       groupChannelsHash(resolvedProcessGroupChannels(a.resolved)) !== groupChannelsHash(resolvedProcessGroupChannels(b.resolved))
     )
       throw Error("Configuration, broker identity, paths or units changed");
@@ -283,7 +336,11 @@ export const processGroupUpgradeRequestSchema = z
   });
 export type ProcessGroupUpgradeRequest = z.infer<typeof processGroupUpgradeRequestSchema>;
 /** Shared journal observations; only PID/start identity and fresh capture prove readiness. */
-export function inspectProcessGroupUpgradeJournal(review: Pick<GroupVersionUpgradeReview,"directory"|"journalId"|"journalContractSha256"|"profiles">, publisherPid?: number, receiverPid?: number) {
+export function inspectProcessGroupUpgradeJournal(
+  review: Pick<GroupVersionUpgradeReview, "directory" | "journalId" | "journalContractSha256" | "profiles">,
+  publisherPid?: number,
+  receiverPid?: number,
+) {
   const file = path.join(review.directory, "admission.sqlite");
   if (fs.realpathSync(file) !== file) throw Error("Unsafe retained journal path");
   const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
@@ -325,6 +382,54 @@ export function inspectProcessGroupUpgradeJournal(review: Pick<GroupVersionUpgra
           rows.some((r) => r["name"] === p.processName && r["pid"] === publisherPid && !!r["owner"] && identity(publisherPid, r["runtime_identity"])),
         ),
     };
+  } finally {
+    db.close();
+  }
+}
+
+/** Bounded, read-only usage for a retained file/configuration input journal. */
+export function inspectProcessGroupUpgradeUsage(review: Pick<GroupVersionUpgradeReview, "directory" | "journalId" | "journalContractSha256">) {
+  const file = path.join(review.directory, "admission.sqlite"),
+    s = fs.lstatSync(file);
+  if (
+    fs.realpathSync(file) !== file ||
+    !s.isFile() ||
+    s.nlink !== 1 ||
+    s.uid !== process.getuid?.() ||
+    (s.mode & 0o077) !== 0 ||
+    s.size > 512 * 1024 * 1024
+  )
+    throw Error("Private retained journal required");
+  const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
+  const db = new DatabaseSync(file, { readOnly: true });
+  try {
+    db.exec("PRAGMA query_only=ON; PRAGMA busy_timeout=1000; BEGIN");
+    if (db.prepare("PRAGMA quick_check").get()!["quick_check"] !== "ok") throw Error("Journal integrity unconfirmed");
+    const meta = Object.fromEntries(
+      db
+        .prepare("SELECT key,value FROM metadata WHERE key IN ('id','contract')")
+        .all()
+        .map((r) => [r["key"], r["value"]]),
+    );
+    if (meta["id"] !== review.journalId || sha256(String(meta["contract"])) !== review.journalContractSha256)
+      throw Error("Retained journal identity changed");
+    const usage = db.prepare("SELECT records,bytes FROM usage WHERE id=1").get();
+    const pending = db.prepare("SELECT COUNT(*) records,COALESCE(SUM(bytes),0) bytes FROM tasks").get()!;
+    const records = Number(pending["records"]),
+      bytes = Number(pending["bytes"]);
+    if (
+      !usage ||
+      usage["records"] !== records ||
+      usage["bytes"] !== bytes ||
+      !Number.isSafeInteger(records) ||
+      records < 0 ||
+      records > 100000 ||
+      !Number.isSafeInteger(bytes) ||
+      bytes < 0 ||
+      bytes > 256 * 1024 * 1024
+    )
+      throw Error("Retained journal usage unconfirmed");
+    return { records, bytes };
   } finally {
     db.close();
   }

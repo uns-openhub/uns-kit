@@ -59,6 +59,9 @@ describe("uns-kit upgrade", () => {
     expect(agents).toContain("node_modules/@uns-kit/core/MIGRATIONS.md");
     expect(agents).toContain("Process-owned and standalone proxies have different shutdown paths.");
     expect(agents).toContain("migrate MQTT `message.table.columns` publishers");
+    expect(agents).toContain("`<3.0.32` to `>=3.0.32`");
+    expect(agents).toContain("separate reviewed protocol3 transition");
+    expect(agents).toContain("`<3.0.31` to `>=3.0.31`");
   });
 
   it("preserves existing unsDatahub metadata", async () => {

@@ -9,6 +9,33 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.32 - Reviewed process-group MQTT output enablement
+
+When crossing `<3.0.32` to `>=3.0.32`, ordinary services, input journals and
+existing outboxes remain unchanged. Output persistence is never enabled by a
+package update. Hosts may explicitly review nested paired transition protocol 3
+through `runtime/process-group-upgrade.js`; ordinary version/generation reviews
+retain their strict configuration comparison.
+
+Applications opting in declare
+`unsDatahub.processGroupMqttOutputRuntime = { protocolVersion: 1, instanceName }`,
+matching the actual SDK output proxy. Keep parsing, profiles, resources, paths and
+units in the application; do not add a service-name branch to a host.
+
+Use a separate reviewed permanent output mount and retain the exact input journal.
+On rollback, stop admission and drain already admitted input before stopping the
+publisher. Pending output, changed storage/owner/destination and unknown outcomes
+block restoration; preserve both journals and reconcile the same operation. Never
+rename an owner, choose another directory or remove data to bypass these checks.
+The managed outbox format remains schema2 and the stable identity serialization
+is byte compatible with3.0.31. A matching host implementation is required for the
+optional transition; applications without the capability require no migration.
+
+See the SDK developer guide
+[reviewed MQTT output enablement](https://github.com/uns-openhub/uns-kit/blob/master/docs/process-group-mqtt-output-transition.md)
+for declarations, proxy configuration, review examples and recovery limits.
+Source preparation and owner-operated npm publication are separate steps.
+
 ## 3.0.31 - Explicit Runtime-managed MQTT outbox storage
 
 For an optional Runtime-managed MQTT outbox set `output.publishQueue.storage` to

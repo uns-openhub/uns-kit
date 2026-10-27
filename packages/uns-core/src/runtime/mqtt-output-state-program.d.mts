@@ -26,3 +26,7 @@ export function validateOutputSnapshot(directory: string, limits: unknown): { qu
 export function outputStateRelative(root: string, directory: string): string;
 
 export function outputStateMain(args?: string[]): Promise<void>;
+
+export function inspectManagedOutputQueue(root: string, directory: string, identity: string, limits: unknown, requireStopped?: boolean): {
+  rootId: string; relative: string; identity: string; records: number; bytes: number; exists: boolean; ownerActive:boolean;
+};

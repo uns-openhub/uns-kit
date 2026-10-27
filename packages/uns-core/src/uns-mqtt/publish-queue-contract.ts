@@ -31,3 +31,27 @@ export type MqttPublishQueueStatus = {
   retries: number;
   lastError: string | null;
 };
+
+/** Stable queue owner/destination. Keep byte-compatible with issued schema-2 outboxes. */
+export function mqttPublishQueueIdentity(
+  packageName: string,
+  owner: string,
+  channel: {
+    host: string;
+    port?: number | undefined;
+    protocol?: string | undefined;
+    mqttSSL?: boolean | undefined;
+    hosts?: unknown;
+    servers?: unknown;
+  },
+): string {
+  return JSON.stringify({
+    package: packageName,
+    owner,
+    host: channel.host,
+    port: channel.port ?? (channel.mqttSSL ? 8883 : 1883),
+    protocol: channel.protocol ?? (channel.mqttSSL ? "mqtts" : "mqtt"),
+    hosts: channel.hosts ?? null,
+    servers: channel.servers ?? null,
+  });
+}

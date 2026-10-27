@@ -187,6 +187,56 @@ export function openManagedOutputRoot(directory, root) {
     throw e;
   }
 }
+/** Read-only reviewed handoff evidence. Never initializes, deletes or rebinds a queue. */
+export function inspectManagedOutputQueue(root, directory, identity, limits, requireStopped = true) {
+  outputStateLimits(limits);
+  assertOutputStateRoot(root);
+  const relative = outputStateRelative(root, directory);
+  noLinks(directory);
+  const { DatabaseSync } = sqlite();
+  const file = path.join(root, guardName);
+  check(file);
+  check(file + "-journal", false, true);
+  const guard = new DatabaseSync(file, { readOnly: true });
+  let owner;
+  try {
+    guard.exec("PRAGMA busy_timeout=1000; BEGIN");
+    const meta = Object.fromEntries(guard.prepare("SELECT key,value FROM metadata").all().map(r => [r.key,r.value]));
+    if (!exactKeys(meta, ["schema", "id"]) || meta.schema !== "mqtt-output-root-1" || !uuid.test(meta.id)) fail();
+    const marker = path.join(root, markerName);
+    if (fs.existsSync(marker)) {
+      const m = privateJson(marker);
+      if (!exactKeys(m,["schemaVersion","state","sourceSha","rootId"]) || m.schemaVersion !== 1 ||
+          m.state !== "complete" || !hex.test(m.sourceSha) || m.rootId !== meta.id) fail();
+    }
+    if (fs.existsSync(path.join(root, stageName))) fail();
+    check(path.dirname(directory), true, true);
+    const base = {rootId: meta.id, relative, identity};
+    if (!check(directory, true, true)) return {...base, records:0, bytes:0, exists:false, ownerActive:false};
+    const entries = fs.opendirSync(directory);
+    const names = [];
+    try { let e; while ((e=entries.readSync())) { if (names.length >= 5) fail(); names.push(e.name); } }
+    finally { entries.closeSync(); }
+    if (names.length === 0) return {...base, records:0, bytes:0, exists:false, ownerActive:false};
+    if (names.some(n => !["mqtt-outbox.sqlite","mqtt-outbox.sqlite-wal","mqtt-outbox.sqlite-shm","mqtt-outbox-owner.sqlite","mqtt-outbox-owner.sqlite-journal"].includes(n))) fail();
+    let physicalBytes=0;
+    for (const name of names) { physicalBytes+=check(path.join(directory,name)).size; if(physicalBytes>limits.maximumSnapshotBytes) fail(); }
+    const ownerFile = path.join(directory,"mqtt-outbox-owner.sqlite");
+    check(ownerFile);
+    // Existing writer's exclusive lease must be released, even when usage is zero.
+    let ownerActive=false;
+    owner = new DatabaseSync(ownerFile);
+    try { owner.exec("PRAGMA busy_timeout=0; BEGIN EXCLUSIVE"); }
+    catch(e) { if(requireStopped || e.errcode!==5) throw e; ownerActive=true; }
+
+    const dbFile = path.join(directory,"mqtt-outbox.sqlite");
+    if (check(dbFile).size > limits.maximumSnapshotBytes) fail();
+    const status = inspectDatabase(dbFile,{rootId:meta.id,relative},limits);
+    if (status.identity !== identity) fail();
+    return {...base, records:status.records, bytes:status.bytes, exists:true, ownerActive};
+  } finally { owner?.close(); guard.close(); }
+}
+
 export function validateOutputRow(row) {
   if (typeof row.record !== "string" || sha(row.record) !== row.sha256) throw Error("MQTT outbox integrity check failed; pending work preserved");
   const r = JSON.parse(row.record);
@@ -219,6 +269,7 @@ function inspectDatabase(file, binding, limits) {
   const { DatabaseSync } = sqlite(),
     db = new DatabaseSync(file, { readOnly: true });
   try {
+    db.exec("PRAGMA busy_timeout=1000; BEGIN");
     if (db.prepare("PRAGMA quick_check").get().quick_check !== "ok") fail();
     const meta = Object.fromEntries(
       db

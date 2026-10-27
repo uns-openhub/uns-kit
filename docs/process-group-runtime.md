@@ -136,3 +136,7 @@ retain their old group paths; group IDs must be unique across namespaces on that
 node. Ambiguity fails the backup. Current conservative backup bounds remain nine
 journals, 512MiB per database and1GiB per capsule; excess state fails visibly.
 No live archiver spool is included by this reader.
+
+A separate [reviewed MQTT output enablement candidate](process-group-mqtt-output-transition.md)
+adds nested transition protocol 3. It retains both existing group runtime protocols
+and does not widen ordinary version/generation configuration comparisons.

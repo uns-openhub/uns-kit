@@ -1,10 +1,9 @@
-import { processGroupUpgradeRequestSchema } from "../packages/uns-core/src/runtime/process-group-upgrade.js";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { authorizeProcessGroupRuntime } from "../packages/uns-core/src/runtime/process-group-authorization.js";
 import { processGroupJournalContract, processGroupSourceIdentity } from "../packages/uns-core/src/runtime/process-group-contract.js";
@@ -14,12 +13,25 @@ import {
   configurationAuthorizationHash as hash,
   sha256,
 } from "../packages/uns-core/src/runtime/process-group-resources.js";
+import { processGroupUpgradeRequestSchema } from "../packages/uns-core/src/runtime/process-group-upgrade.js";
 import {
   type UpgradeConfigurations,
   processGroupUpgradeInputSchema,
   replaceReviewedProcessGroupPolicy,
+  reviewInstalledProcessGroupMqttOutput,
   reviewInstalledProcessGroupUpgrade,
 } from "../packages/uns-core/src/runtime/process-group-upgrade.js";
+
+const outputInspection = vi.hoisted(() => ({ records: 0, bytes: 0, rootId: "11111111-1111-4111-8111-111111111111" }));
+vi.mock("../packages/uns-core/src/runtime/mqtt-output-state-program.mjs", async (original) => ({
+  ...(await original<object>()),
+  inspectManagedOutputQueue: (_root: string, _dir: string, identity: string) => ({
+    ...outputInspection,
+    relative: "observations/combined",
+    identity,
+    exists: false,
+  }),
+}));
 
 const roots: string[] = [];
 afterEach(() => {
@@ -190,10 +202,92 @@ describe("shared installed process-group version review", () => {
   });
 });
 
-
 it("keeps the documented request example valid for the shared upgrade schema", () => {
   const guide = fs.readFileSync(new URL("../docs/process-group-version-upgrade.md", import.meta.url), "utf8");
   const example = guide.match(/```json\n([\s\S]*?)\n```/);
   expect(example).not.toBeNull();
   expect(processGroupUpgradeRequestSchema.parse(JSON.parse(example![1]!)).action).toBe("preview");
+});
+
+describe("explicit generic MQTT output enablement", () => {
+  function outputFixture(nested = false) {
+    const f = fixture(nested);
+    const pkg = path.join(f.configs.target.publisher.packageRoot, "package.json");
+    const data = JSON.parse(fs.readFileSync(pkg, "utf8"));
+    data.unsDatahub.processGroupMqttOutputRuntime = { protocolVersion: 1, instanceName: "observations" };
+    fs.writeFileSync(pkg, JSON.stringify(data));
+    Object.assign(f.configs.target.publisher.raw["uns"] as object, { handover: false, instanceMode: "force" });
+    f.configs.target.publisher.raw["output"] = {
+      publishQueue: { mode: "durable", storage: "runtime", directory: "/var/lib/output/observations/combined" },
+    };
+    const review = () => {
+      const prior = process.env.UNS_PROCESS_GROUP_AUTHORIZATION_FILE;
+      process.env.UNS_PROCESS_GROUP_AUTHORIZATION_FILE = f.policyFile;
+      try {
+        return reviewInstalledProcessGroupMqttOutput(
+          f.configs,
+          "local",
+          path.dirname(path.dirname(path.dirname(f.directory))),
+          [],
+          "/var/lib/output",
+        );
+      } finally {
+        if (prior === undefined) delete process.env.UNS_PROCESS_GROUP_AUTHORIZATION_FILE;
+        else process.env.UNS_PROCESS_GROUP_AUTHORIZATION_FILE = prior;
+      }
+    };
+    outputInspection.records = 0;
+    outputInspection.bytes = 0;
+    return { ...f, review };
+  }
+  it.each([false, true])("keeps profiles, destination and journal for unrelated selectors=%s", (nested) => {
+    const f = outputFixture(nested),
+      before = fs.readFileSync(f.policyFile),
+      prepared = f.review();
+    expect(prepared.review.protocolVersion).toBe(3);
+    expect(prepared.review.directory).toBe(f.directory);
+    expect(prepared.review.profiles.map((p) => p.processName)).toEqual(["east", "west"]);
+    expect(fs.readFileSync(f.policyFile)).toEqual(before);
+    replaceReviewedProcessGroupPolicy(f.policyFile, prepared.review.sourcePolicySha256, prepared.targetPolicy);
+    expect(authorizeProcessGroupRuntime(f.context("target")).role).toBe("target");
+    replaceReviewedProcessGroupPolicy(f.policyFile, prepared.review.targetPolicySha256, prepared.sourcePolicy);
+    expect(fs.readFileSync(f.policyFile)).toEqual(before);
+  });
+  it.each(["unit", "broker", "receiver", "input", "queueMode", "handover", "declaration", "pending"])(
+    "rejects %s with old authority preserved",
+    (kind) => {
+      const f = outputFixture(),
+        before = fs.readFileSync(f.policyFile),
+        raw = f.configs.target.publisher.raw as any;
+      if (kind === "unit") raw.unit = "MWh";
+      if (kind === "broker") raw.output.host = "elsewhere.invalid";
+      if (kind === "receiver") f.configs.target.receiver.raw["output"] = raw.output;
+      if (kind === "input") raw.durable.journalId = randomUUID();
+      if (kind === "queueMode") raw.output.publishQueue.mode = "buffered";
+      if (kind === "handover") raw.uns.handover = true;
+      if (kind === "pending") outputInspection.records = 1;
+      if (kind === "declaration") {
+        const p = path.join(f.configs.target.publisher.packageRoot, "package.json"),
+          pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+        delete pkg.unsDatahub.processGroupMqttOutputRuntime;
+        fs.writeFileSync(p, JSON.stringify(pkg));
+      }
+      expect(f.review).toThrow();
+      expect(fs.readFileSync(f.policyFile)).toEqual(before);
+    },
+  );
+  it("requires explicit acknowledgement and refuses source/target aliasing", () => {
+    const p = (id: string) => ({ controller: "local", rttNode: "unrelated", version: "1.0.0", instanceId: id });
+    const input = {
+      protocolVersion: 3,
+      source: { publisher: p("a"), receiver: p("b") },
+      target: { publisher: p("c"), receiver: p("d") },
+      acknowledgeInputPause: true,
+      acknowledgePossibleReplay: true,
+      acknowledgePendingOutputBlocksRollback: true,
+    };
+    expect(processGroupUpgradeInputSchema.parse(input).protocolVersion).toBe(3);
+    expect(() => processGroupUpgradeInputSchema.parse({ ...input, acknowledgePendingOutputBlocksRollback: false })).toThrow();
+    expect(() => processGroupUpgradeInputSchema.parse({ ...input, target: input.source })).toThrow();
+  });
 });

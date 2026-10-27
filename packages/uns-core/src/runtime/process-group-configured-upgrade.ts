@@ -5,6 +5,7 @@ import { configurationResourceHash } from "./configuration-group-contract.js";
 import { authorizeProcessGroupRuntime, processGroupAuthorizationFile, validateProcessGroupPolicyCandidate } from "./process-group-authorization.js";
 import { resolvedProcessGroupChannels } from "./process-group-contract.js";
 import { describeInstalledProcessGroupGeneration, inspectGenerationJournal } from "./process-group-generation.js";
+import { mqttOutputPortableConfiguration, reviewProcessGroupMqttOutput } from "./process-group-mqtt-output.js";
 import {
   groupArtifactHash,
   groupChannelsHash,
@@ -12,7 +13,13 @@ import {
   readProcessGroupResource as read,
   sha256,
 } from "./process-group-resources.js";
-import type { GroupVersionUpgradeReview, PreparedGroupUpgrade, UpgradeConfiguration, UpgradeConfigurations } from "./process-group-upgrade.js";
+import type {
+  GroupMqttOutputReview,
+  GroupVersionUpgradeReview,
+  PreparedGroupUpgrade,
+  UpgradeConfiguration,
+  UpgradeConfigurations,
+} from "./process-group-upgrade.js";
 
 /** Same generation, different paired artifacts. Never initializes or rewrites the journal. */
 export function reviewInstalledConfigurationGroupUpgrade(
@@ -20,6 +27,33 @@ export function reviewInstalledConfigurationGroupUpgrade(
   controllerName: string,
   stateRoot: string,
   excludedUnsFields: readonly string[] = [],
+): PreparedGroupUpgrade {
+  return reviewConfigurationGroup(configs, controllerName, stateRoot, excludedUnsFields, false);
+}
+export function reviewInstalledConfigurationGroupMqttOutput(
+  configs: UpgradeConfigurations,
+  controllerName: string,
+  stateRoot: string,
+  excludedUnsFields: readonly string[] = [],
+): PreparedGroupUpgrade {
+  const mqttOutput = reviewProcessGroupMqttOutput(configs, process.env["UNS_MQTT_OUTPUT_STATE_ROOT"], stateRoot);
+  const result = reviewConfigurationGroup(configs, controllerName, stateRoot, excludedUnsFields, true);
+  return {
+    ...result,
+    review: {
+      ...result.review,
+      protocolVersion: 3,
+      mqttOutput,
+      delivery: { inputPausePossible: true, exactlyOnceOutput: false, pendingOutputBlocksRollback: true },
+    } as GroupMqttOutputReview,
+  };
+}
+function reviewConfigurationGroup(
+  configs: UpgradeConfigurations,
+  controllerName: string,
+  stateRoot: string,
+  excludedUnsFields: readonly string[],
+  mqttOutput: boolean,
 ): PreparedGroupUpgrade {
   const context = (c: UpgradeConfiguration) => ({
     packageRoot: c.packageRoot,
@@ -38,13 +72,13 @@ export function reviewInstalledConfigurationGroupUpgrade(
   const pkg = (c: UpgradeConfiguration) => JSON.parse(read(path.join(c.packageRoot, "package.json")).toString()),
     sourcePackage = pkg(source),
     targetPackage = pkg(target);
-  if (!sourcePackage.version || !targetPackage.version || sourcePackage.version === targetPackage.version)
+  if (!sourcePackage.version || !targetPackage.version || (!mqttOutput && sourcePackage.version === targetPackage.version))
     throw Error("Two different installed paired versions required");
   const old = authorizeProcessGroupRuntime(context(source));
   const sourcePolicy = read(old.file, true),
     previous = configurationGroupAuthorizationSchema.parse(JSON.parse(sourcePolicy.toString()));
-  const portable = (raw: Record<string, unknown>) => {
-    const copy = structuredClone(raw),
+  const portable = (raw: Record<string, unknown>, role: "publisher" | "receiver") => {
+    const copy = mqttOutput ? mqttOutputPortableConfiguration(raw, role) : structuredClone(raw),
       uns = { ...(copy["uns"] as Record<string, unknown>) };
     for (const key of excludedUnsFields) delete uns[key];
     copy["uns"] = uns;
@@ -69,7 +103,7 @@ export function reviewInstalledConfigurationGroupUpgrade(
         (role === "receiver"
           ? g.normalized.runtimeRole !== "admission"
           : g.normalized.runtimeRole !== undefined && g.normalized.runtimeRole !== "publisher") ||
-        portable(c.raw) !== portable(configs.source[role].raw) ||
+        portable(c.raw, role) !== portable(configs.source[role].raw, role) ||
         groupChannelsHash(g.channels) !== groupChannelsHash(a.channels) ||
         processGroupAuthorizationFile(context(c)) !== old.file
       )

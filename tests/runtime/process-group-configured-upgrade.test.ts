@@ -1,12 +1,29 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { authorizeProcessGroupRuntime } from "../../packages/uns-core/src/runtime/process-group-authorization.js";
 import { resolvedProcessGroupChannels } from "../../packages/uns-core/src/runtime/process-group-contract.js";
 import { inspectGenerationJournal } from "../../packages/uns-core/src/runtime/process-group-generation.js";
-import { replaceReviewedProcessGroupPolicy, reviewInstalledProcessGroupUpgrade } from "../../packages/uns-core/src/runtime/process-group-upgrade.js";
+import {
+  replaceReviewedProcessGroupPolicy,
+  reviewInstalledProcessGroupMqttOutput,
+  reviewInstalledProcessGroupUpgrade,
+} from "../../packages/uns-core/src/runtime/process-group-upgrade.js";
 import { generationFixture } from "../helpers/process-group-generation-fixture.js";
+
+vi.mock("../../packages/uns-core/src/runtime/mqtt-output-state-program.mjs", async (original) => ({
+  ...(await original<object>()),
+  inspectManagedOutputQueue: (_r: string, _d: string, identity: string) => ({
+    rootId: "11111111-1111-4111-8111-111111111111",
+    relative: "documents/combined",
+    identity,
+    records: 0,
+    bytes: 0,
+    exists: false,
+    ownerActive: false,
+  }),
+}));
 
 function fixture(name = "quality-adapter", nested = false) {
   const f = generationFixture(name, nested, true);
@@ -131,6 +148,35 @@ describe("configured same-journal paired version review", () => {
     const f = generationFixture();
     try {
       expect(() => reviewInstalledProcessGroupUpgrade(f.configs, "local", f.stateRoot)).toThrow();
+    } finally {
+      f.close();
+    }
+  });
+});
+
+describe("configuration-owned MQTT output enablement", () => {
+  it.each([
+    ["quality-adapter", false],
+    ["document-router", true],
+  ] as const)("%s retains its opaque resource and pending tasks", (name, nested) => {
+    const f = fixture(name, nested);
+    try {
+      process.env["UNS_MQTT_OUTPUT_STATE_ROOT"] = "/var/lib/output";
+      const p = path.join(f.configs.target.publisher.packageRoot, "package.json"),
+        pkg = JSON.parse(fs.readFileSync(p, "utf8"));
+      pkg.unsDatahub.processGroupMqttOutputRuntime = { protocolVersion: 1, instanceName: "observations" };
+      fs.writeFileSync(p, JSON.stringify(pkg));
+      const raw = f.configs.target.publisher.raw as any;
+      raw.output = { ...(raw.output ?? {}), publishQueue: { mode: "durable", storage: "runtime", directory: "/var/lib/output/documents/combined" } };
+      raw.uns.handover = false;
+      raw.uns.instanceMode = "force";
+      const prepared = reviewInstalledProcessGroupMqttOutput(f.configs, "local", f.stateRoot);
+      if (prepared.review.protocolVersion !== 3) throw Error("Wrong protocol");
+      expect(prepared.review.retainedJournal?.journalId).toBe(f.journals.source.journalId);
+      expect(inspectGenerationJournal(prepared.review.retainedJournal!)).toMatchObject({ records: 1 });
+      replaceReviewedProcessGroupPolicy(prepared.review.policyFile, prepared.review.sourcePolicySha256, prepared.targetPolicy);
+      expect(authorizeProcessGroupRuntime(f.context("target", "publisher")).journalId).toBe(f.journals.source.journalId);
+      replaceReviewedProcessGroupPolicy(prepared.review.policyFile, prepared.review.targetPolicySha256, prepared.sourcePolicy);
     } finally {
       f.close();
     }

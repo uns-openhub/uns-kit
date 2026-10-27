@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mqttPublishQueueSchema, type MqttPublishQueueStatus } from "./publish-queue-contract.js";
+import { mqttPublishQueueIdentity, mqttPublishQueueSchema, type MqttPublishQueueStatus } from "./publish-queue-contract.js";
 import { readFileSync } from "fs";
 import { IClientPublishOptions } from "mqtt";
 import * as path from "path";
@@ -223,12 +223,7 @@ export default class UnsMqttProxy extends UnsProxy {
       subscribeThrottlingDelay: this.unsParameters.subscribeThrottlingDelay ?? 1,
       persistToDisk: false,
       publishQueue: this.unsParameters.publishQueue,
-      publishQueueIdentity: this.unsParameters.publishQueue ? JSON.stringify({
-        package: packageJson.name, owner: instanceNameWithSuffix,
-        host: mqttHost, port: mqttParameters.port ?? (mqttParameters.mqttSSL ? 8883 : 1883),
-        protocol: mqttParameters.protocol ?? (mqttParameters.mqttSSL ? "mqtts" : "mqtt"),
-        hosts: mqttParameters.hosts ?? null, servers: mqttParameters.servers ?? null,
-      }) : undefined,
+      publishQueueIdentity: this.unsParameters.publishQueue ? mqttPublishQueueIdentity(packageJson.name, instanceNameWithSuffix, { host: mqttHost, ...mqttParameters }) : undefined,
       mqttHost: mqttHost,
       instanceNameWithSuffix: instanceNameWithSuffix,
       mqttParameters: mqttParameters,
