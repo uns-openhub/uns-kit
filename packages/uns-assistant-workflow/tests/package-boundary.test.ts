@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import { pathToFileURL } from "node:url";
@@ -108,11 +108,13 @@ describe("assistant workflow package boundary", () => {
       tarballPath = join(PACKAGE_ROOT, artifact.filename);
 
       writeFileSync(join(consumerDir, "package.json"), JSON.stringify({ type: "module" }));
+      // Keep pnpm's local-tarball cache key independent of the checkout depth.
+      copyFileSync(tarballPath, join(consumerDir, "package.tgz"));
       execPnpm([
         "add",
         "--ignore-scripts",
         "--no-lockfile",
-        tarballPath,
+        "./package.tgz",
       ], { cwd: consumerDir });
 
       const output = execFileSync(

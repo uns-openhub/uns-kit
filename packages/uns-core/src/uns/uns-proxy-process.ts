@@ -1,3 +1,4 @@
+import { MQTT_DRAIN_HANDLER, MQTT_DRAIN_READY_EVENT, drainMqttForMigration, type MqttDrainReceipt } from "../runtime/mqtt-drain.js";
 import { randomBytes } from "crypto";
 
 import logger from "../logger.js";
@@ -48,6 +49,8 @@ class UnsProxyProcess {
   private statusMonitor: StatusMonitor;
   private serviceMetadataTopic: string;
   private shutdownPromise: Promise<void> | null = null;
+  private migrationDrainPromise: Promise<MqttDrainReceipt> | null = null;
+  private migrationDrainHandler?: () => Promise<MqttDrainReceipt>;
 
   // Plugin
   static pluginApiVersion = 1;
@@ -213,7 +216,7 @@ class UnsProxyProcess {
     handover: boolean,
     unsParameters?: IUnsParameters,
   ): Promise<UnsMqttProxy> {
-    if (unsParameters?.publishQueue && handover) {
+    if (unsParameters?.publishQueue && unsParameters.publishQueue.enabled !== false && handover) {
       throw new Error("Persistent MQTT output requires handover=false and one owner; legacy RAM handover does not transfer an outbox");
     }
     // Wait until the MQTT connection is established before proceeding.
@@ -276,10 +279,36 @@ class UnsProxyProcess {
     return resolved;
   }
 
-  /**
-   * Shuts down the process by clearing intervals, timeouts, and removing
-   * MQTT event listeners, and stopping the StatusMonitor.
-   */
+  /** Call after application input handlers and shutdown hooks are prepared. */
+  public enableMigrationDrain(): void {
+    const registry = globalThis as unknown as Record<symbol, unknown>;
+    if (this.migrationDrainHandler) return;
+    if (registry[MQTT_DRAIN_HANDLER]) throw Error("One migration drain owner is allowed per process");
+    this.migrationDrainHandler = () => this.drainForMigration();
+    registry[MQTT_DRAIN_HANDLER] = this.migrationDrainHandler;
+    (process as unknown as { emit(event: string, value: unknown): boolean }).emit(MQTT_DRAIN_READY_EVENT, { protocol: 1 });
+  }
+
+  /** Works without a Controller too; success means confirmed empty output and closed owners. */
+  public drainForMigration(timeoutMs = this.handoverShutdown?.timeoutMs ?? 30_000): Promise<MqttDrainReceipt> {
+    if (this.migrationDrainPromise) return this.migrationDrainPromise;
+    this.migrationDrainPromise = (async () => {
+      const receipt = await drainMqttForMigration({
+        quiesce: async () => {
+          this.handoverShutdown?.onRelease?.();
+          await Promise.all(this.unsMqttProxies.map(proxy => proxy.setSubscriberPassiveAndDrainQueue()));
+        },
+        finishAccepted: async () => { await this.handoverShutdown?.drain(); },
+        outputs: this.unsMqttProxies,
+        timeoutMs,
+      });
+      await this.shutdown({ drain: true, timeoutMs });
+      return receipt;
+    })().catch(error => { this.migrationDrainPromise = null; throw error; });
+    return this.migrationDrainPromise;
+  }
+
+  /** Stop process timers, status publication and all owned MQTT proxies. */
   public shutdown(options: UnsMqttProxyStopOptions = {}): Promise<void> {
     if (this.shutdownPromise) {
       return this.shutdownPromise;
@@ -335,6 +364,11 @@ class UnsProxyProcess {
       throw new AggregateError(shutdownErrors, `${this.processName} - Shutdown completed with errors.`);
     }
 
+    if (this.migrationDrainHandler) {
+      const registry = globalThis as unknown as Record<symbol, unknown>;
+      if (registry[MQTT_DRAIN_HANDLER] === this.migrationDrainHandler) delete registry[MQTT_DRAIN_HANDLER];
+      process.channel?.unref();
+    }
     logger.info(`${this.processName} - Shutdown complete.`);
   }
 }

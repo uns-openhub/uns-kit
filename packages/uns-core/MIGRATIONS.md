@@ -9,6 +9,22 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.33 - Explicit queue disablement and generic clean MQTT migration
+
+When crossing `<3.0.33` to `>=3.0.33`, existing applications require no change.
+An existing `publishQueue` remains enabled unless explicitly configured otherwise.
+Use `enabled: false` only for an initial RAM-only deployment or a verified empty
+old queue: pending state, another identity or a live owner blocks disabling.
+
+Applications opting into ordinary clean MQTT migration declare `unsDatahub.mqttDrain`
+protocol1 and call `UnsProxyProcess.enableMigrationDrain()` after preparation.
+Provide `handoverShutdown` hooks that stop background admission and await all
+accepted application work; report publication failures instead of silently losing
+them. Hosts must wait for the bound SDK drain receipt and clean original exit;
+PM2 online/stopped alone is insufficient. Unknown results block the successor.
+Keep standalone shutdown functional. This does not retire paired input journals
+or imply automatic queue transfer. See [the capability and example](https://github.com/uns-openhub/uns-kit/blob/master/docs/mqtt-migration-drain.md).
+
 ## 3.0.32 - Reviewed process-group MQTT output enablement
 
 When crossing `<3.0.32` to `>=3.0.32`, ordinary services, input journals and

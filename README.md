@@ -48,6 +48,8 @@ For optional configuration-owned resources prepared in3.0.29, see the
 [independent adapter example](docs/examples/configuration-process-group.md),
 [reviewed resource generations](docs/process-group-generations.md) and
 [same-journal paired version upgrades](docs/process-group-version-upgrade.md).
+For ordinary MQTT services, see [clean migration drain and explicitly disabled
+output persistence](docs/mqtt-migration-drain.md).
 SDK npm publication, compatible host/helper releases and deployment are separate.
 For the active cross-repository migration of MQTT table columns from arrays to
 named objects, see

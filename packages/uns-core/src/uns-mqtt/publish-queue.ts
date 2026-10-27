@@ -28,6 +28,7 @@ export class MqttPublishQueue {
     private changed: (status: MqttPublishQueueStatus) => void = () => {},
   ) {
     this.config = mqttPublishQueueSchema.parse(options);
+    if (!this.config.enabled) throw Error("Disabled MQTT persistence must be resolved before constructing an outbox");
     this.store = new MqttPublishQueueStore(this.config, identity);
     const saved = this.store.summary();
     if (saved.records > this.config.maxRecords || saved.bytes > this.config.maxBytes) {

@@ -27,6 +27,7 @@ export function managedMqttOutputBinding(config: unknown, root: string | undefin
   const value = config as { output?: { publishQueue?: unknown } };
   if (value?.output?.publishQueue === undefined) return undefined;
   const queue = mqttPublishQueueSchema.parse(value.output.publishQueue);
+  if (queue.enabled === false) return undefined;
   if (queue.storage !== "runtime" || !root)
     throw Error("Controller-managed MQTT output requires storage=runtime and a reviewed persistent Runtime mount");
   return { directory: queue.directory, relative: outputStateRelative(root, queue.directory) };

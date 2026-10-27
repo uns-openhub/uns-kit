@@ -3,6 +3,7 @@ import { z } from "zod";
 /** Opt-in output buffering; absence preserves the issued MQTT publisher. */
 export const mqttPublishQueueSchema = z
   .object({
+    enabled: z.boolean().default(true),
     mode: z.enum(["buffered", "durable"]),
     storage: z.enum(["local", "runtime"]).default("local"),
     directory: z.string().min(1),
@@ -31,6 +32,10 @@ export type MqttPublishQueueStatus = {
   retries: number;
   lastError: string | null;
 };
+
+export function isMqttPublishQueueEnabled(value: MqttPublishQueueOptions | undefined): boolean {
+  return value !== undefined && value.enabled !== false;
+}
 
 /** Stable queue owner/destination. Keep byte-compatible with issued schema-2 outboxes. */
 export function mqttPublishQueueIdentity(

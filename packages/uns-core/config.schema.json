@@ -1434,6 +1434,10 @@
               "description": "Opt-in MQTT output persistence; does not persist input subscriptions.",
               "type": "object",
               "properties": {
+                "enabled": {
+                  "default": true,
+                  "type": "boolean"
+                },
                 "mode": {
                   "type": "string",
                   "enum": [

@@ -1,3 +1,4 @@
+import { assertDisabledPublishQueueEmpty } from "./disabled-publish-queue.js";
 import { randomUUID } from "node:crypto";
 import { mqttPublishQueueIdentity, mqttPublishQueueSchema, type MqttPublishQueueStatus } from "./publish-queue-contract.js";
 import { readFileSync } from "fs";
@@ -102,6 +103,7 @@ export default class UnsMqttProxy extends UnsProxy {
   private stopPromise: Promise<void> | null = null;
   private expectedWorkerExit = false;
   private publishQueueStatus?: MqttPublishQueueStatus;
+  private publishesSealed = false;
   private admissionBytes = new Map<string, number>();
   private pendingAdmissionBytes = 0;
   private queueRequests = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
@@ -155,7 +157,11 @@ export default class UnsMqttProxy extends UnsProxy {
     };
     this.unsParameters = { ...(unsParameters ?? {}) };
     if (unsParameters?.publishQueue) {
-      this.unsParameters.publishQueue = mqttPublishQueueSchema.parse(unsParameters.publishQueue);
+      const queue = mqttPublishQueueSchema.parse(unsParameters.publishQueue);
+      if (queue.enabled === false) {
+        assertDisabledPublishQueueEmpty(queue, mqttPublishQueueIdentity(packageJson.name, this.instanceNameWithSuffix, { host: mqttHost, ...mqttParameters }));
+        delete this.unsParameters.publishQueue;
+      } else this.unsParameters.publishQueue = queue;
       if ((unsParameters.publishConcurrency ?? 1) !== 1) throw Error("Persistent MQTT output requires publishConcurrency=1");
     }
     this.startQueueWorker(mqttHost, this.instanceNameWithSuffix, mqttParameters, publisherActive, subscriberActive);
@@ -304,6 +310,7 @@ export default class UnsMqttProxy extends UnsProxy {
    */
   private async enqueueMessageToWorkerQueue(topic: string, message: string, options?: IClientPublishOptions): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (this.publishesSealed) { reject(Error("MQTT output admission is sealed after clean migration drain")); return; }
       if (this.lifecycleState !== "running") {
         reject(new Error(`${this.instanceNameWithSuffix} - MQTT proxy is ${this.lifecycleState}; publish rejected.`));
         return;
@@ -441,6 +448,7 @@ export default class UnsMqttProxy extends UnsProxy {
    * producer-side delta calculation loses state across restarts.
    */
   public async publishMqttMessage(mqttMessage: IMqttPublishRequest | null, mode: MessageMode = MessageMode.Raw) {
+    if (this.publishesSealed) throw Error("MQTT output admission is sealed after clean migration drain");
     if (!mqttMessage) {
       logger.error(`${this.instanceNameWithSuffix} - Error publishing mqtt message: mqttMessage must be defined.`);
       return;
@@ -817,6 +825,9 @@ export default class UnsMqttProxy extends UnsProxy {
       throw stopError;
     }
   }
+
+  /** A completed migration owns this fence until the original process exits. */
+  public sealPublishes(): void { this.publishesSealed = true; }
 
   public getPublishQueueStatus(): MqttPublishQueueStatus | undefined {
     return this.publishQueueStatus ? { ...this.publishQueueStatus } : undefined;

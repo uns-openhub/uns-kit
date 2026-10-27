@@ -71,6 +71,16 @@ describe("UnsMqttProxy publish drain contract", () => {
     FakeWorker.instances.length = 0;
   });
 
+  it("rejects late raw and structured publication after the migration admission fence", async () => {
+    const proxy = new UnsMqttProxy("localhost", "inspection", "one");
+    const worker = getLastWorker();
+    proxy.sealPublishes();
+    await expect(proxy.publishMessage("synthetic/late", "value")).rejects.toThrow("sealed");
+    await expect(proxy.publishMqttMessage(null)).rejects.toThrow("sealed");
+    expect(worker.postedMessages.some(message => message.command === "enqueue")).toBe(false);
+    await proxy.stop({ drain: false });
+  });
+
   it("rejects publishMessage immediately when the worker reports queue-full at enqueue time", async () => {
     const proxy = new UnsMqttProxy("localhost", "proc", "instance", {
       maxPendingPublishes: 2,

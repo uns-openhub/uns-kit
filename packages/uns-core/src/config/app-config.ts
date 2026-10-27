@@ -115,6 +115,7 @@ export interface ProjectAppConfig {
         servername?: string | undefined;
         /** Opt-in MQTT output persistence; does not persist input subscriptions. */
         publishQueue?: {
+            enabled?: boolean;
             mode: "buffered" | "durable";
             storage?: "local" | "runtime";
             directory: string;
