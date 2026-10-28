@@ -79,6 +79,7 @@ const namespaces = rootEntries
   .sort();
 if (namespaces.length > 64) fail();
 const capturedGroups = new Set();
+const retirementChecks = new Map();
 for (const namespace of namespaces) {
   if (!/^[a-z][a-z0-9-]{0,99}$/.test(namespace)) fail();
   const namespaceRoot = path.join(root, namespace),
@@ -240,9 +241,52 @@ for (const namespace of namespaces) {
       if (snapshotBytes > limits.maximumSnapshotBytes) fail();
       info[name === "admission.sqlite" ? "admissionSha256" : "ownershipSha256"] = fileHash(p);
     }
+    // Retired ownership is part of recovery evidence, never an automatic launch permit.
+    // Version2 makes an older transport fail closed instead of silently omitting it.
+    const policyDirectory=path.join(namespaceRoot,"authorizations"),policyFile=path.join(policyDirectory,group+".json");
+    let policyExists=false;
+    try{fs.lstatSync(policyFile);policyExists=true;}catch(e){if(e.code!=="ENOENT")throw e;}
+    if(policyExists){
+      check(policyDirectory,true);check(policyFile);
+      if(fs.statSync(policyFile).size>65536)fail();
+      const policy=fs.readFileSync(policyFile),p=JSON.parse(policy.toString());
+      if(p.schemaVersion===5){
+        if(info.usage.records!==0||info.usage.bytes!==0||p.kind!=="uns-process-group-direct-retirement"||p.protocolVersion!==1||p.stateRoot!==root||p.namespace!==namespace||
+          p.journal?.directory!==source||p.journal?.generationId!==group||p.journal?.journalId!==info.journalId||
+          p.journal?.journalContractSha256!==info.contractSha256||typeof p.sourcePolicyJson!=="string"||Buffer.byteLength(p.sourcePolicyJson)>32768||hash(p.sourcePolicyJson)!==p.sourcePolicySha256||
+          !["open","closed"].includes(p.recovery))fail();
+        fs.writeFileSync(path.join(target,"retirement-policy.json"),policy,{mode:0o600,flag:"wx"});
+        info.retirementPolicySha256=hash(policy);info.retirementPolicyBytes=policy.length;
+        snapshotBytes+=policy.length;if(snapshotBytes>limits.maximumSnapshotBytes)fail();
+        // Freeze this observation; a concurrent policy switch requires a new consistent capture.
+        if(!fs.readFileSync(policyFile).equals(policy))fail();
+        manifest.schemaVersion=2;
+        retirementChecks.set(policyFile,hash(policy));
+      }
+    }
     manifest.groups.push(info);
   }
 }
+// Direct configurations no longer name the old journal. Its retained policy must
+// still resolve to captured state, even after the stopped source configs are removed.
+let registryFiles=0;
+for(const namespace of namespaces){
+  const registry=path.join(root,namespace,"authorizations");
+  let entries;
+  try{check(registry,true);entries=fs.readdirSync(registry,{withFileTypes:true});}catch(e){if(e.code==="ENOENT")continue;throw e;}
+  if(entries.length>64||entries.some(e=>e.isSymbolicLink()))fail();
+  for(const entry of entries){
+    if(!entry.name.endsWith(".json"))continue;
+    if(++registryFiles>64||!entry.isFile()||!/^([a-z][a-z0-9-]{0,99})\.json$/.test(entry.name))fail();
+    const file=path.join(registry,entry.name);check(file);if(fs.statSync(file).size>65536)fail();
+    const bytes=fs.readFileSync(file),policy=JSON.parse(bytes.toString());
+    if(policy.schemaVersion!==5)continue;
+    const captured=manifest.groups.find(g=>g.namespace===namespace&&g.group===policy.journal?.generationId);
+    if(!captured||captured.retirementPolicySha256!==hash(bytes)||captured.journalId!==policy.journal?.journalId||
+      policy.namespace!==namespace||policy.stateRoot!==root||entry.name!==policy.journal.generationId+".json")fail();
+  }
+}
+for(const [file,digest] of retirementChecks){check(file);if(hash(fs.readFileSync(file))!==digest)fail();}
 const remaining = fs.statfsSync(output, { bigint: true });
 if (remaining.bavail * remaining.bsize < BigInt(snapshotBytes + 64 * 1024 * 1024)) fail();
 const manifestBytes = JSON.stringify(manifest) + "\n";

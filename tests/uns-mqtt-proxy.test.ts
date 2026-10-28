@@ -71,6 +71,16 @@ describe("UnsMqttProxy publish drain contract", () => {
     FakeWorker.instances.length = 0;
   });
 
+  it("exposes broker subscription readiness and clears it on disconnect or worker exit",async()=>{
+    const proxy=new UnsMqttProxy("localhost","readiness","one"),worker=getLastWorker();
+    expect(proxy.getInputReadiness()).toBe(false);expect(proxy.getConnectionReadiness()).toBe(false);
+    worker.emit("message",{command:"mqttProxyStatus",event:"mqtt-connected",value:1});expect(proxy.getConnectionReadiness()).toBe(true);
+    worker.emit("message",{command:"mqttProxyStatus",event:"mqtt-subscriptions-ready",value:1});expect(proxy.getInputReadiness()).toBe(true);
+    worker.emit("message",{command:"mqttProxyStatus",event:"mqtt-subscriptions-ready",value:0});expect(proxy.getInputReadiness()).toBe(false);
+    worker.emit("message",{command:"mqttProxyStatus",event:"mqtt-subscriptions-ready",value:1});worker.emit("exit",1);expect(proxy.getInputReadiness()).toBe(false);expect(proxy.getConnectionReadiness()).toBe(false);
+    await proxy.stop({drain:false});
+  });
+
   it("rejects late raw and structured publication after the migration admission fence", async () => {
     const proxy = new UnsMqttProxy("localhost", "inspection", "one");
     const worker = getLastWorker();

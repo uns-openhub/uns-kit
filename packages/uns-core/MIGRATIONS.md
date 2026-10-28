@@ -9,6 +9,31 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.34 - Optional paired-input retirement to one direct process
+
+When crossing `<3.0.34` to `>=3.0.34`, ordinary applications require no change.
+Packages opting into `unsDatahub.processGroupDirectRuntime` use shared declaration,
+resource review and startup/readiness helpers under `runtime/process-group-direct-*`.
+The authenticated host must stop receiver first, drain the same input journal,
+prove both original exits and persist one launch intent before starting one direct
+successor. Preserve business profiles, paths, units, journal UUID and original policy.
+
+Schema5 retirement evidence fences old journal owners and original profiles.
+Open recovery pins exact direct configuration/artifact/placement/launch; explicit
+closure releases ordinary direct management but retains the old journal and fences.
+Unknown outcomes stay blocked in the same operation. Never remove policy/journal
+files, rename an owner or force a second launch to bypass review.
+
+`UnsMqttProxy.getInputReadiness()` exposes current SUBACK evidence. Register normal
+signal/drain handlers and confirm output before declaring direct readiness; perform
+confirmation asynchronously when the configured queue must accept during outages.
+No Controller heartbeat is required for normal application cleanup.
+
+Backup snapshots with retirement evidence use internal manifest2 and include exact
+retirement/original-policy bytes. Update the transport helper from the same SDK
+asset before activation; older transports fail closed. Restore remains offline
+review only. See [declaration, API example and limits](https://github.com/uns-openhub/uns-kit/blob/master/docs/process-group-direct-retirement.md).
+
 ## 3.0.33 - Explicit queue disablement and generic clean MQTT migration
 
 When crossing `<3.0.33` to `>=3.0.33`, existing applications require no change.

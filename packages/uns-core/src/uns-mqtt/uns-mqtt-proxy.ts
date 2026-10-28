@@ -101,6 +101,12 @@ export default class UnsMqttProxy extends UnsProxy {
   private workerFailure: Error | null = null;
   private lifecycleState: UnsMqttProxyLifecycleState = "running";
   private stopPromise: Promise<void> | null = null;
+  private subscriptionsReady = false;
+  private connectionReady = false;
+  /** Current worker transport connection; does not imply an archive/database commit. */
+  public getConnectionReadiness(): boolean { return this.lifecycleState === "running" && this.connectionReady; }
+  /** Latest broker SUBACK evidence; false before startup, disconnect or worker failure. */
+  public getInputReadiness(): boolean { return this.lifecycleState === "running" && this.subscriptionsReady; }
   private expectedWorkerExit = false;
   private publishQueueStatus?: MqttPublishQueueStatus;
   private publishesSealed = false;
@@ -277,11 +283,15 @@ export default class UnsMqttProxy extends UnsProxy {
       } else if (msg && (msg.command === "handover_subscriber" || msg.command === "handover_publisher")) {
         this.event.emit("mqttWorker", { command: msg.command, batchSize: msg.batchSize, referenceHash: msg.referenceHash, instanceName: this.instanceName });
       } else if (msg && msg.command === "mqttProxyStatus") {
+        if (msg.event === "mqtt-connected") this.connectionReady = msg.value === 1;
+        if (msg.event === "mqtt-subscriptions-ready") this.subscriptionsReady = msg.value === 1;
         this.event.emit("mqttProxyStatus", { event: msg.event, value: msg.value, uom: msg.uom, statusTopic: msg.statusTopic });
       }
     });
 
     this.worker.on("error", (err) => {
+      this.subscriptionsReady = false;
+      this.connectionReady = false;
       if (this.expectedWorkerExit) {
         return;
       }
@@ -291,6 +301,8 @@ export default class UnsMqttProxy extends UnsProxy {
     });
 
     this.worker.on("exit", (code) => {
+      this.subscriptionsReady = false;
+      this.connectionReady = false;
       if (this.expectedWorkerExit) {
         return;
       }

@@ -19,9 +19,9 @@ import {
 } from "../../packages/uns-core/src/runtime/process-group-resources.js";
 import type { UpgradeConfigurations } from "../../packages/uns-core/src/runtime/process-group-upgrade.js";
 
-export function generationFixture(name = "quality-adapter", nested = false, configurationSource = false) {
+export function generationFixture(name = "quality-adapter", nested = false, configurationSource = false, options: {stateRoot?:string} = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sdk-generation-"))),
-    stateRoot = path.join(root, "state"),
+    stateRoot = options.stateRoot ?? path.join(root, "state"),
     namespace = nested ? "documents" : "quality";
   const write = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value), { mode: 0o600 });
   const selector = nested ? ["behavior", "rules"] : ["transform"],

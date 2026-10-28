@@ -3,8 +3,11 @@
 Available in `@uns-kit/core` 3.0.27. This is an opt-in SDK contract for applications
 and host launchers; ordinary publishers require no migration.
 
-The optional [configuration-owned protocol-2 extension prepared for3.0.29](process-group-configuration-runtime.md)
-is documented separately. It is unreleased and does not widen protocol 1 or policies 1–3.
+The optional [configuration-owned protocol-2 extension](process-group-configuration-runtime.md)
+is documented separately and does not widen protocol1 or policies1–3.
+
+The optional [paired-journal retirement to one direct process](process-group-direct-retirement.md)
+is prepared separately for3.0.34; it does not replace ordinary paired upgrades.
 
 Start with the [Controller/SDK/application ownership rule](controller-runtime-boundary.md).
 The [worked meter-transformer example](examples/process-group-runtime.md) shows

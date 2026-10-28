@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import * as legacy from "./compatibility/energenti-authorization-v1.js";
 import { configurationGroupAuthorizationSchema, configurationGroupPolicyIdentity, verifyConfigurationGroupPolicy } from "./configuration-group-authorization.js";
+import { processGroupRetirementPolicySchema } from "./process-group-direct-contract.js";
 import {
   type ProcessGroupRuntimeDescriptor,
   normalizeProcessGroupConfiguration,
@@ -86,6 +87,25 @@ export const hvAuthorizationSchema = legacy.hvAuthorizationSchema;
 export const productionGroupIds = legacy.productionGroupIds;
 const issued = new WeakSet<object>();
 const privateDirectory = assertPrivateProcessGroupDirectory;
+/** A retirement keeps the original journal/policy bound; older readers fail closed on schema5. */
+export function parseProcessGroupRetirementPolicy(value:unknown) {
+  const p=processGroupRetirementPolicySchema.parse(value);
+  if(sha(p.sourcePolicyJson)!==p.sourcePolicySha256)throw Error("Original retirement policy bytes changed");
+  const raw=JSON.parse(p.sourcePolicyJson), original=raw.schemaVersion===4?configurationGroupAuthorizationSchema.parse(raw):processGroupAuthorizationSchema.parse(raw);
+  const policyId=original.schemaVersion===4?original.generationId:original.groupId;
+  if(original.packageName!==p.packageName||original.namespace!==p.namespace||original.groupId!==p.groupId||original.controllerName!==p.controllerName||original.stateRoot!==p.stateRoot||original.directory!==p.journal.directory||original.journalId!==p.journal.journalId||policyId!==p.journal.generationId||original.directory!==path.join(p.stateRoot,p.namespace,"admission",policyId)||original.channelsSha256!==p.target.channelsSha256)
+    throw Error("Retirement journal or authority differs from original policy");
+  if((original.schemaVersion===4?original.groupSha256:original.groupManifestSha256)!==p.target.resourceSha256)
+    throw Error("Retirement resource differs from original policy");
+  for(const role of ["publisher","receiver"] as const){
+    const m=p.source[role], before=original.placements.find(x=>x.role===(role==="publisher"?"target":"receiver"));
+    if(!before||before.instanceId!==m.placement.instanceId||before.processName!==m.processName||before.configurationSha256!==m.policyConfigurationSha256||original.artifactSha256!==m.artifactSha256||m.placement.rttNode!==p.packageName)
+      throw Error("Retirement source placement differs from original policy");
+  }
+  if(p.target.placement.rttNode!==p.packageName||p.journal.profiles.some(x=>!original.placements.some(y=>y.role==="source"&&y.processName===x.processName)))
+    throw Error("Retirement profile ownership differs");
+  return p;
+}
 function registryRoot(root: string, dir: string): string {
   if (!path.isAbsolute(root) || path.resolve(root) !== root || path.resolve(dir) !== dir) throw Error("Invalid policy registry");
   privateDirectory(root);
@@ -196,6 +216,13 @@ export function configuredGroupProcessNames(): Set<string> {
     const result = new Set<string>();
     for (const file of files) {
       const raw = JSON.parse(read(file, true).toString());
+      if(raw.schemaVersion===5){
+        const p=parseProcessGroupRetirementPolicy(raw);
+        if(p.stateRoot!==root||file!==path.join(root,p.namespace,"authorizations",p.journal.generationId+".json"))throw Error("Retirement registry binding differs");
+        privateDirectory(root);privateDirectory(path.dirname(file));
+        for(const member of [...p.journal.profiles,p.source.publisher,p.source.receiver])result.add(member.processName);
+        continue;
+      }
       const p =
         raw.schemaVersion === 4 ? configurationGroupAuthorizationSchema.parse(raw) : raw.schemaVersion === 3
           ? processGroupAuthorizationSchema.parse(raw)

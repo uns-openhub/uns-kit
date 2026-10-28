@@ -91,7 +91,12 @@ export default class MqttProxy {
     }
   }
 
+  private lastTransportConnected: boolean | undefined;
   private emitSubscriptionReadiness(force = false): void {
+    if(force || this.lastTransportConnected!==this.isConnected){
+      this.lastTransportConnected=this.isConnected;
+      this.event.emit("mqttProxyStatus",{event:"mqtt-connected",value:this.isConnected?1:0,uom:DataSizeMeasurements.Bit,statusTopic:this.statusTopic+"mqtt-connected"});
+    }
     const ready = this.subscriptionReadiness.ready();
     if (!force && ready === this.lastSubscriptionReady) return;
     this.lastSubscriptionReady = ready;

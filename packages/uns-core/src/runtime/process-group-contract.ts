@@ -13,7 +13,7 @@ export { legacyDescriptorForPackage, legacyEnergentiDescriptor } from "./compati
 
 export const processGroupProtocolVersion = 1 as const;
 const identity = z.string().regex(/^[a-z][a-z0-9-]{0,99}$/);
-const selector = z
+export const processGroupConfigurationSelectorSchema = z
   .array(
     z
       .string()
@@ -22,6 +22,7 @@ const selector = z
   )
   .min(1)
   .max(8);
+const selector = processGroupConfigurationSelectorSchema;
 const relative = z
   .string()
   .min(1)
