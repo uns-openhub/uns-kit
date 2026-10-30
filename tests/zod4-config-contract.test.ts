@@ -101,6 +101,10 @@ describe("Zod 4 config contracts", () => {
     expect((props.input.properties as Record<string, JsonSchema>).publishQueue).toBeUndefined();
     expect((props.infra.properties as Record<string, JsonSchema>).publishQueue).toBeUndefined();
     delete (props.output.properties as Record<string, JsonSchema>).publishQueue;
+    const handover = (props.uns.properties as Record<string, JsonSchema>).handoverProtocol;
+    expect(handover.enum).toEqual(["correlated-v1", "correlated-v2"]);
+    delete handover.enum;
+    handover.const = "correlated-v1";
     expect(contractDigest(legacyProjection)).toBe(zod3JsonContractDigest);
     expect(generatedTypes).toBe(trackedTypes);
   });

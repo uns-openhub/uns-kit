@@ -9,6 +9,31 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.35 - Opt-in state-preserving MQTT handover
+
+When crossing `<3.0.35` to `>=3.0.35`, existing applications keep their current
+handover behavior. State continuity is opt-in: declare `mqttHandover` protocol2
+and `mqttDrain` protocol1, pass `uns.handoverProtocol: "correlated-v2"` to
+`UnsProxyProcess`, declare each proxy's semantic `handoverStateContract`, and
+register migration drain after installing application input handlers.
+
+Use an updated host that understands this capability and its bound drain/exit
+receipt. Both peers must support the protocol; persistent output and other
+runtime-owned state remain separate reviewed transfers. No package-name logic
+or application callbacks may be executed by the host to inspect compatibility.
+
+The SDK transfers its counter baselines and publication sequence state only after
+accepted work and output flush. The target advertises compatibility before the
+source freezes. Different destination/subscriptions/proxy sets/semantic revisions
+block the handover while the source remains active. New paths start fresh;
+removed paths do not erase history; changed unit/type must not reuse arithmetic
+baselines. Matching path strings alone are not a compatibility guarantee.
+
+Unknown outcomes must be reconciled under the same operation. Return ownership
+with a fresh reverse handover from the current owner, never by restarting stale
+RAM. This is not crash durability or universal exactly-once MQTT delivery.
+See [example, protocol and limits](https://github.com/uns-openhub/uns-kit/blob/master/docs/mqtt-stateful-handover.md).
+
 ## 3.0.34 - Optional paired-input retirement to one direct process
 
 When crossing `<3.0.34` to `>=3.0.34`, ordinary applications require no change.

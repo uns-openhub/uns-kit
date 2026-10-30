@@ -112,6 +112,8 @@ export function isQuestDbType(value: unknown): value is QuestDbType {
 }
 
 export interface IUnsParameters {
+  /** Stable semantic revision of calculation state; change when meaning/scaling changes. Required for correlated-v2. */
+  handoverStateContract?: string;
   /** Optional MQTT output persistence; absence keeps issued queue behavior. */
   publishQueue?: MqttPublishQueueOptions;
   mqttSubToTopics?: string | string[];
@@ -156,6 +158,8 @@ export interface IUnsProcessParameters {
    * Older peers ignore it, so it must never be required for normal startup.
    */
   handoverId?: string;
+  /** Opt-in state-preserving MQTT handover. Requires matching SDK peers. */
+  handoverProtocol?: "correlated-v1" | "correlated-v2";
   mqttSubToTopics?: string | string[];
   username?: string;
   password?: string;

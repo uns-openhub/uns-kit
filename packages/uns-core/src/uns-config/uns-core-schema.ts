@@ -109,7 +109,7 @@ export const unsCoreSchema = z
         instanceMode: z.enum(["wait", "force", "handover"]).default("wait"),
         processName: z.string().min(1).describe("Process name used in MQTT topics and logs."),
         handover: z.boolean().default(true),
-        handoverProtocol: z.literal("correlated-v1").optional().describe("Opt-in controller-correlated MQTT handover protocol."),
+        handoverProtocol: z.enum(["correlated-v1", "correlated-v2"]).optional().describe("Opt-in controller-correlated MQTT handover protocol."),
         supervisor: supervisorSchema.optional(),
         jwksWellKnownUrl: z.string().url().optional(),
         kidWellKnownUrl: z.string().url().optional(),

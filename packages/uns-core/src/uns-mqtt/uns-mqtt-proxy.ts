@@ -1,5 +1,6 @@
+import { mqttProxyHandoverStateSchema, type MqttProxyHandoverState } from "../runtime/mqtt-handover-state.js";
 import { assertDisabledPublishQueueEmpty } from "./disabled-publish-queue.js";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { mqttPublishQueueIdentity, mqttPublishQueueSchema, type MqttPublishQueueStatus } from "./publish-queue-contract.js";
 import { readFileSync } from "fs";
 import { IClientPublishOptions } from "mqtt";
@@ -87,6 +88,7 @@ type InternalMqttMessage = {
 
 export default class UnsMqttProxy extends UnsProxy {
   public static readonly DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
+  private readonly stateCompatibility: string | undefined;
   private lastValues: Map<string, { value: ValueType; uom: string; timestamp: Date }> = new Map();
   private worker: Worker;
   private pendingEnqueues: Map<string, { resolve: () => void; reject: (reason?: any) => void }> = new Map();
@@ -125,6 +127,15 @@ export default class UnsMqttProxy extends UnsProxy {
   ) {
     super();
     this.instanceName = instanceName;
+    const contract = unsParameters?.handoverStateContract;
+    if (contract !== undefined && (typeof contract !== "string" || !contract.trim() || contract.length > 256)) throw Error("Invalid MQTT state compatibility contract");
+    // Bind state to semantic revision and actual endpoints/subscriptions, never credentials or client IDs.
+    this.stateCompatibility = contract ? createHash("sha256").update(JSON.stringify({
+      contract, host: mqttHost, ssl: unsParameters?.mqttSSL ?? false,
+      port: unsParameters?.port ?? null, protocol: unsParameters?.protocol ?? null,
+      hosts: unsParameters?.hosts ?? [], servers: unsParameters?.servers ?? [],
+      subscriptions: [unsParameters?.mqttSubToTopics ?? []].flat().slice().sort(),
+    })).digest("hex") : undefined;
     // Create the topic builder using packageJson values and the processName.
     this.topicBuilder = new MqttTopicBuilder(`uns-infra/${MqttTopicBuilder.sanitizeTopicPart(packageJson.name)}/${MqttTopicBuilder.sanitizeTopicPart(packageJson.version)}/${MqttTopicBuilder.sanitizeTopicPart(processName)}/`);
 
@@ -390,6 +401,54 @@ export default class UnsMqttProxy extends UnsProxy {
    * @param batchSize - Optional batch size.
    * @param referenceHash - Optional reference hash.
    */
+  public getHandoverCompatibility(): { instanceName: string; compatibility: string } {
+    if (!this.stateCompatibility) throw Error("MQTT semantic handover contract is missing");
+    return { instanceName: this.instanceName, compatibility: this.stateCompatibility };
+  }
+
+  public exportHandoverState(cursor: { batchSize: number; referenceHash: string }): MqttProxyHandoverState {
+    return mqttProxyHandoverStateSchema.parse({
+      instanceName: this.instanceName, compatibility: this.stateCompatibility,
+      values: [...this.lastValues].map(([topic, entry]) => ({ topic, ...entry, timestamp: entry.timestamp.toISOString() })),
+      sequences: [...this.currentSequenceId], cursor,
+    });
+  }
+
+  public validateHandoverState(input: MqttProxyHandoverState): void {
+    const state = mqttProxyHandoverStateSchema.parse(input);
+    if (!this.stateCompatibility || state.compatibility !== this.stateCompatibility)
+      throw Error("MQTT destination, subscriptions or calculation-state contract changed; review migration compatibility");
+    if (state.instanceName !== this.instanceName || this.lastValues.size || this.currentSequenceId.size)
+      throw Error("MQTT successor state is not empty or belongs to another proxy");
+  }
+
+  public importHandoverState(input: MqttProxyHandoverState): void {
+    this.validateHandoverState(input);
+    const state = mqttProxyHandoverStateSchema.parse(input);
+    if (state.instanceName !== this.instanceName || this.lastValues.size || this.currentSequenceId.size)
+      throw Error("MQTT successor state is not empty or belongs to another proxy");
+    this.lastValues = new Map(state.values.map(entry => [entry.topic, { value: entry.value, uom: entry.uom, timestamp: new Date(entry.timestamp) }]));
+    this.currentSequenceId = new Map(state.sequences.map(([topic, sequence]) => [topic, sequence]));
+  }
+
+  public prepareHandoverResume(cursor: { batchSize: number; referenceHash: string }): Promise<void> {
+    return this.subscriberControl("prepareSubscriberResume", cursor);
+  }
+
+  public activateHandoverResume(): Promise<void> { return this.subscriberControl("activatePreparedSubscriber"); }
+
+  private subscriberControl(command: string, cursor?: { batchSize: number; referenceHash: string }): Promise<void> {
+    if (this.workerFailure) return Promise.reject(this.workerFailure);
+    if (this.queueRequests.size >= 64) return Promise.reject(Error("Too many pending MQTT controls"));
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.queueRequests.delete(id); reject(Error("MQTT subscriber control timed out")); }, 30_000);
+      this.queueRequests.set(id, { resolve, reject, timer });
+      try { this.worker.postMessage({ command, id, cursor }); }
+      catch (error) { clearTimeout(timer); this.queueRequests.delete(id); reject(error); }
+    });
+  }
+
   public setSubscriberActive(batchSize?: number, referenceHash?: string): void {
     this.worker.postMessage({ command: "setSubscriberActive", batchSize, referenceHash });
   }
@@ -398,8 +457,8 @@ export default class UnsMqttProxy extends UnsProxy {
    * Sets the subscriber to passive mode.
    * @returns A promise that resolves when the subscriber is set to passive.
    */
-  public setSubscriberPassive(): Promise<UnsEvents["mqttWorker"]> {
-    this.worker.postMessage({ command: "setSubscriberPassive"});
+  public setSubscriberPassive(strict = false): Promise<UnsEvents["mqttWorker"]> {
+    this.worker.postMessage({ command: "setSubscriberPassive", strict });
     return new Promise((resolve) => {
       const handler = (msg: UnsEvents["mqttWorker"]) => {
         if (msg.command === "handover_subscriber") {
@@ -417,8 +476,8 @@ export default class UnsMqttProxy extends UnsProxy {
    * Sets the subscriber to passive mode and allows the publisher to run
    * until the queue is empty (all messages are processed).
    */
-  public async setSubscriberPassiveAndDrainQueue(): Promise<UnsEvents["mqttWorker"]> {
-    const mqttWorkerData = await this.setSubscriberPassive();
+  public async setSubscriberPassiveAndDrainQueue(strict = false): Promise<UnsEvents["mqttWorker"]> {
+    const mqttWorkerData = await this.setSubscriberPassive(strict);
     await this.flush();
     logger.info(`${this.instanceNameWithSuffix} - Subscriber set to passive and queue drained.`);
     return mqttWorkerData;
@@ -748,7 +807,7 @@ export default class UnsMqttProxy extends UnsProxy {
         const lastValueEntry = this.lastValues.get(publishTopic);
         const currentTime = new Date(msg.packet.message.data.time);
 
-        if (lastValueEntry) {
+        if (lastValueEntry && lastValueEntry.uom === newUom && typeof lastValueEntry.value === typeof newValue) {
           const intervalBetweenMessages = currentTime.getTime() - lastValueEntry.timestamp.getTime();
           const lastValue = lastValueEntry.value;
           this.lastValues.set(publishTopic, { value: newValue, uom: newUom, timestamp: currentTime });

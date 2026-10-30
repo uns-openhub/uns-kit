@@ -273,8 +273,8 @@ describe("UnsMqttProxy publish drain contract", () => {
 describe("generated numeric delta semantics", () => {
   beforeEach(() => { FakeWorker.instances.length = 0; });
 
-  const setup = () => {
-    const proxy = new UnsMqttProxy("localhost", "delta-test", "output");
+  const setup = (host = "localhost", contract = "counter-v1") => {
+    const proxy = new UnsMqttProxy(host, "delta-test", "output", {handoverStateContract: contract});
     const worker = getLastWorker();
     const originalPost = worker.postMessage.bind(worker);
     worker.postMessage = message => {
@@ -325,6 +325,33 @@ describe("generated numeric delta semantics", () => {
         expect(test.metadata()).toHaveLength(1);
       }
     } finally { await test.proxy.stop({ drain: false }); }
+  });
+
+  it("imports unchanged paths but starts new paths and changed units with a fresh baseline", async () => {
+    const source = setup(), target = setup();
+    try {
+      await source.proxy.publishMqttMessage(reading(100), MessageMode.Both);
+      const snapshot = source.proxy.exportHandoverState({batchSize: 0, referenceHash: "a".repeat(64)});
+      target.proxy.importHandoverState(snapshot);
+      await target.proxy.publishMqttMessage(reading(117, 5), MessageMode.Both);
+      const added = reading(200, 6); added.attributes[0]!.attribute = "added-counter";
+      await target.proxy.publishMqttMessage(added, MessageMode.Both);
+      const unitChange = reading(118000, 7); unitChange.attributes[0]!.data!.uom = "Wh";
+      await target.proxy.publishMqttMessage(unitChange, MessageMode.Both);
+      const next = reading(119000, 8); next.attributes[0]!.data!.uom = "Wh";
+      await target.proxy.publishMqttMessage(next, MessageMode.Both);
+      expect(target.packets().filter(p => p.topic.endsWith("-delta")).map(p => [p.packet.message.data.value, p.packet.message.data.uom])).toEqual([[17, "kWh"], [1000, "Wh"]]);
+      expect(target.packets().filter(p => !p.topic.endsWith("-delta"))).toHaveLength(4);
+    } finally { await source.proxy.stop({drain:false}); await target.proxy.stop({drain:false}); }
+  });
+
+  it.each(["destination", "semantics"])("rejects transferred baselines after changed %s", async kind => {
+    const source = setup(), target = setup(kind === "destination" ? "other-broker" : "localhost", kind === "semantics" ? "counter-v2" : "counter-v1");
+    try {
+      await source.proxy.publishMqttMessage(reading(100), MessageMode.Both);
+      expect(() => target.proxy.importHandoverState(source.proxy.exportHandoverState({batchSize:0,referenceHash:"a".repeat(64)}))).toThrow(/compatibility/);
+      expect(target.packets()).toHaveLength(0);
+    } finally { await source.proxy.stop({drain:false}); await target.proxy.stop({drain:false}); }
   });
 
   it("preserves zero increments, legacy zero-reading suppression and resets", async () => {

@@ -209,7 +209,10 @@
             "handoverProtocol": {
               "description": "Opt-in controller-correlated MQTT handover protocol.",
               "type": "string",
-              "const": "correlated-v1"
+              "enum": [
+                "correlated-v1",
+                "correlated-v2"
+              ]
             },
             "supervisor": {
               "type": "object",

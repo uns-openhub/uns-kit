@@ -1,3 +1,4 @@
+import { mqttHandoverOfferSchema, parseMqttHandoverState, mqttHandoverStateDigest, type MqttHandoverState } from "../runtime/mqtt-handover-state.js";
 import logger from "../logger.js";
 import { runHandoverShutdown, validateHandoverShutdown, type HandoverShutdownHooks } from "./handover-shutdown.js";
 import { HandoverManagerEvents } from "../uns-mqtt/mqtt-interfaces.js";
@@ -36,6 +37,12 @@ export class HandoverManager {
   private sourcePreparation: Promise<void> | undefined;
   private sourceExit: Promise<void> | undefined;
   private readonly shutdownHooks: HandoverShutdownHooks | undefined;
+  private expectedSourceId: string | undefined;
+  private preparedState: MqttHandoverState | undefined;
+  private stateDigest: string | undefined;
+  private acceptedStateDigest: string | undefined;
+  private targetPreparation: Promise<void> | undefined;
+  private finRetry: NodeJS.Timeout | undefined;
   public handoverRequestEnabled: boolean = false;
   public handoverEnabled: boolean = true;
   public forceStartEnabled: boolean = false;
@@ -50,6 +57,7 @@ export class HandoverManager {
     forceStartEnabled: boolean,
     handoverId?: string,
     shutdownHooks?: HandoverShutdownHooks,
+    private readonly statefulHandover = false,
   ) {
     validateHandoverShutdown(shutdownHooks);
     this.shutdownHooks = shutdownHooks ? { ...shutdownHooks } : undefined;
@@ -71,6 +79,7 @@ export class HandoverManager {
 
     // Set status as active after a timeout if no other active process are detected.
     this.activeTimeout = setTimeout(() => {
+      if (this.statefulHandover && this.handoverId) return; // A reviewed successor never self-promotes.
       logger.info(`${this.processName} - No active message received within timeout. Assuming no other process is running.`);
       this.active = true;
       this.event.emit("handoverManager", { active: this.active });
@@ -100,6 +109,7 @@ export class HandoverManager {
     const normalized = normalizeHandoverId(handoverId ?? this.handoverId);
     return JSON.stringify({
       type,
+      ...(this.statefulHandover ? { protocol: 2 } : {}),
       ...fields,
       ...(normalized ? { handoverId: normalized } : {}),
     });
@@ -190,6 +200,7 @@ export class HandoverManager {
           this.activeTimeout = undefined;
           this.event.emit("handoverManager", { active: this.active });
           this.requestingHandover = true;
+          this.expectedSourceId = sourceProcessId;
           const eventHandoverTopic = new MqttTopicBuilder(MqttTopicBuilder.extractBaseTopic(event.topic)).getHandoverTopic();
           await this.mqttProxy.publish(eventHandoverTopic, this.handoverPayload("handover_intent"), {
             retain: false,
@@ -201,7 +212,7 @@ export class HandoverManager {
           setTimeout(async () => {
             logger.info(`${this.processName} - Requesting handover ${eventHandoverTopic}.`);
             this.handoverInProgress = true;
-            await this.mqttProxy.publish(eventHandoverTopic, this.handoverPayload("handover_request"), {
+            await this.mqttProxy.publish(eventHandoverTopic, this.handoverPayload("handover_request", undefined, this.statefulHandover ? { offer: this.unsMqttProxies.map(proxy => proxy.getHandoverCompatibility()) } : {}), {
               retain: false,
               properties: {
                 responseTopic: this.topicBuilder.getHandoverTopic(),
@@ -265,8 +276,25 @@ export class HandoverManager {
     const mqttWorkerData: UnsEvents["mqttWorker"][] = [];
     for (let i = 0; i < this.unsMqttProxies.length; i++) {
       const unsProxy = this.unsMqttProxies[i];
-      const workerData = await unsProxy.setSubscriberPassiveAndDrainQueue();
+      const workerData = await unsProxy.setSubscriberPassiveAndDrainQueue(this.statefulHandover);
       mqttWorkerData.push(workerData);
+    }
+    if (this.statefulHandover) {
+      // Finish accepted application callbacks before taking the calculation-state boundary.
+      await this.shutdownHooks?.drain();
+      for (const proxy of this.unsMqttProxies) await proxy.flush();
+      this.preparedState = parseMqttHandoverState({ protocol: 1, proxies: this.unsMqttProxies.map((proxy, i) =>
+        proxy.exportHandoverState({ batchSize: mqttWorkerData[i].batchSize, referenceHash: mqttWorkerData[i].referenceHash })) });
+      this.stateDigest = mqttHandoverStateDigest(this.preparedState);
+      await this.sendPreparedState(event, handoverId);
+      let retries = 0;
+      this.finRetry = setInterval(() => {
+        if (++retries > 30 || this.sourceExit) { clearInterval(this.finRetry); return; }
+        void this.sendPreparedState(event, handoverId).catch(() => logger.warn("MQTT handover receipt retry unavailable"));
+      }, 1000);
+      this.finRetry.unref();
+      // Keep the old owner passive until the successor acknowledges this exact state.
+      return;
     }
     logger.info(`${this.processName} - Handover request accepted. Sending handover_subscriber messages.`);
 
@@ -311,10 +339,45 @@ export class HandoverManager {
     await Promise.all(this.unsMqttProxies.map((unsProxy: UnsMqttProxy) => unsProxy.stop()));
   }
 
+  private async sendPreparedState(event: UnsEvents["input"], handoverId?: string): Promise<void> {
+    await this.mqttProxy.publish(event.packet.properties?.responseTopic ?? "", this.handoverPayload("handover_fin", handoverId,
+      { state: this.preparedState, stateDigest: this.stateDigest }), {
+        retain: false, qos: 1, properties: { responseTopic: this.topicBuilder.getHandoverTopic(), userProperties: this.getUserProperties(handoverId) },
+      });
+  }
+
+  private async acceptPreparedState(response: any): Promise<void> {
+    const state = parseMqttHandoverState(response.state);
+    const digest = mqttHandoverStateDigest(state);
+    if (digest !== response.stateDigest) throw Error("MQTT handover state digest mismatch");
+    const byName = new Map(this.unsMqttProxies.map(proxy => [proxy.instanceName, proxy]));
+    if (byName.size !== this.unsMqttProxies.length || state.proxies.length !== byName.size || state.proxies.some(p => !byName.has(p.instanceName)))
+      throw Error("MQTT handover proxy set differs");
+    for (const snapshot of state.proxies) byName.get(snapshot.instanceName)!.validateHandoverState(snapshot);
+    // Validate every cursor before importing any state or activating any subscriber.
+    for (const snapshot of state.proxies) await byName.get(snapshot.instanceName)!.prepareHandoverResume(snapshot.cursor);
+    for (const snapshot of state.proxies) byName.get(snapshot.instanceName)!.importHandoverState(snapshot);
+    for (const proxy of this.unsMqttProxies) proxy.setPublisherActive();
+    for (const proxy of this.unsMqttProxies) await proxy.activateHandoverResume();
+    this.acceptedStateDigest = digest;
+    this.active = true;
+    this.event.emit("handoverManager", { active: true });
+  }
+
   private async finishSourceHandover(): Promise<void> {
     const result = await runHandoverShutdown(async () => {
       await this.sourcePreparation;
       await this.shutdownHooks?.drain();
+      if (this.statefulHandover) {
+        await Promise.all(this.unsMqttProxies.map(proxy => proxy.stop()));
+        // The host persists this receipt synchronously before the real process
+        // exit. No receipt is emitted for a partial/failed application drain.
+        (process as unknown as { emit(event: string, value: unknown): boolean }).emit("uns-kit:mqtt-handover-drained", {
+          protocol: 2, handoverId: this.acceptedHandoverId,
+          stateDigest: this.stateDigest, pendingRecords: 0,
+          outputs: this.unsMqttProxies.length,
+        });
+      }
     }, this.shutdownHooks?.timeoutMs ?? 30_000);
     this.handoverInProgress = false;
     this.requestingHandover = false;
@@ -330,13 +393,27 @@ export class HandoverManager {
 
   private async handleHandover(event: UnsEvents["input"]): Promise<void> {
     try {
+      if (event.message.length > 1100000) return;
       const response = JSON.parse(event.message.toString());
+      // No downgrade: stateful peers must agree before either relinquishes ownership.
+      if ((response.protocol === 2) !== this.statefulHandover) return;
+      if (this.statefulHandover && (event.packet?.retain || !this.getHandoverId(response, event))) return;
       // Responder process
       // Check if the message is a handover request and publish MULTIPLE handover_subscriber messages
       if (response.type === "handover_request") {
         const peerId = this.getSourceProcessId(event);
         const replyTopic = event.packet?.properties?.responseTopic;
+        if (this.statefulHandover && this.sourcePeerId === peerId && this.acceptedHandoverId === this.getHandoverId(response, event) && this.preparedState) {
+          await this.sendPreparedState(event, this.acceptedHandoverId); return;
+        }
         if (this.sourcePeerId || !this.active || !peerId || typeof replyTopic !== "string" || !replyTopic) return;
+        if (this.statefulHandover) {
+          // Reject incompatible upgrades before freezing the current owner.
+          const offer = mqttHandoverOfferSchema.parse(response.offer);
+          const own = this.unsMqttProxies.map(proxy => proxy.getHandoverCompatibility());
+          if (offer.length !== own.length || own.some(p => !offer.some(o => o.instanceName === p.instanceName && o.compatibility === p.compatibility)))
+            throw Error("MQTT source/destination or semantic contract differs; source remains active");
+        }
         this.sourcePeerId = peerId;
         this.acceptedHandoverId = this.getHandoverId(response, event);
         this.handoverInProgress = true;
@@ -347,8 +424,8 @@ export class HandoverManager {
           await this.sourcePreparation;
         } catch {
           // Subscriber transfer or onRelease failed; never report successful source completion.
-          logger.error(`${this.processName} - Handover source preparation failed. Exiting with incomplete drain.`);
-          if (!this.sourceExit) this.exitSource(1);
+          logger.error(`${this.processName} - Handover source preparation failed; ownership requires review.`);
+          if (!this.sourceExit && !this.statefulHandover) this.exitSource(1);
         }
       }
 
@@ -356,6 +433,7 @@ export class HandoverManager {
       // Check if the message is one of the handover_subscriber message in response to handover_request
       // and publish a handover_ack message
       if (response.type === "handover_subscriber") {
+        if (this.statefulHandover) return;
         if (this.sourcePeerId) return;
         if (!this.acceptsHandoverResponse(this.getHandoverId(response, event))) return;
         // Find correct unsProxy instance for handover_subscriber and set it active
@@ -369,6 +447,18 @@ export class HandoverManager {
       // Requestor process
       // Check if the message is a handover_fin at the end of handover_subscriber messages
       if (response.type === "handover_fin") {
+        if (this.statefulHandover) {
+          const id = this.getHandoverId(response, event);
+          if (this.sourcePeerId || !this.requestingHandover || id !== this.handoverId || this.getSourceProcessId(event) !== this.expectedSourceId) return;
+          if (this.acceptedStateDigest && response.stateDigest !== this.acceptedStateDigest) return;
+          this.targetPreparation ??= this.acceptPreparedState(response);
+          await this.targetPreparation;
+          // Duplicate fin only replays the receipt; it never reapplies a baseline.
+          if (response.stateDigest !== this.acceptedStateDigest) return;
+          await this.mqttProxy.publish(event.packet.properties?.responseTopic ?? "", this.handoverPayload("handover_ack", id,
+            { stateDigest: this.acceptedStateDigest }), { retain: false, qos: 1, properties: { userProperties: this.getUserProperties(id) } });
+          return;
+        }
         if (this.sourcePeerId) return;
         const handoverId = this.getHandoverId(response, event);
         if (!this.acceptsHandoverResponse(handoverId)) return;
@@ -411,6 +501,8 @@ export class HandoverManager {
           logger.warn(`${this.processName} - Ignoring acknowledgement for another migration.`);
           return;
         }
+        if (this.statefulHandover && (handoverId !== this.acceptedHandoverId || response.stateDigest !== this.stateDigest || !this.stateDigest)) return;
+        clearInterval(this.finRetry);
         logger.info(`${this.processName} - Received handover ack from ${event.packet?.properties?.userProperties?.processName}.`);
         this.sourceExit ??= this.finishSourceHandover();
         await this.sourceExit;

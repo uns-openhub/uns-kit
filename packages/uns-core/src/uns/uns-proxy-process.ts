@@ -41,6 +41,7 @@ class UnsProxyProcess {
   private processName: string;
   private processId: string;
   private handoverId: string | undefined;
+  private statefulHandover: boolean = false;
   private handoverShutdown: HandoverShutdownHooks | undefined;
   private unsMqttProxies: UnsMqttProxy[];
   private unsApiProxies: unknown[];
@@ -111,6 +112,7 @@ class UnsProxyProcess {
     validateHandoverShutdown(unsProxyProcessParameters.handoverShutdown);
     this.handoverShutdown = unsProxyProcessParameters.handoverShutdown
       ? { ...unsProxyProcessParameters.handoverShutdown } : undefined;
+    this.statefulHandover = unsProxyProcessParameters.handoverProtocol === "correlated-v2";
     this.processName = unsProxyProcessParameters.processName;
     this.processId = randomBytes(16).toString("hex");
     this.handoverId = unsProxyProcessParameters.handoverId ?? process.env["UNS_HANDOVER_ID"];
@@ -192,6 +194,7 @@ class UnsProxyProcess {
       forceStartEnabled,
       handoverId,
       this.handoverShutdown,
+      this.statefulHandover,
     );
 
     // Listen for handover events.
@@ -235,6 +238,7 @@ class UnsProxyProcess {
       ...(unsParameters ?? {}),
       clientId: unsParameters?.clientId ?? `${this.processName}-${instanceName}-${this.processId}`,
     };
+    if (this.statefulHandover && !resolvedUnsParameters?.handoverStateContract) throw Error("correlated-v2 requires a calculation-state contract for every MQTT proxy");
     const unsMqttProxy = new UnsMqttProxy(mqttHost, this.processName, instanceName, resolvedUnsParameters);
 
     // Listen for UNS proxy producing topics and publish them via MQTT.
@@ -286,7 +290,7 @@ class UnsProxyProcess {
     if (registry[MQTT_DRAIN_HANDLER]) throw Error("One migration drain owner is allowed per process");
     this.migrationDrainHandler = () => this.drainForMigration();
     registry[MQTT_DRAIN_HANDLER] = this.migrationDrainHandler;
-    (process as unknown as { emit(event: string, value: unknown): boolean }).emit(MQTT_DRAIN_READY_EVENT, { protocol: 1 });
+    (process as unknown as { emit(event: string, value: unknown): boolean }).emit(MQTT_DRAIN_READY_EVENT, { protocol: 1, ...(this.statefulHandover ? { handoverProtocol: 2 } : {}) });
   }
 
   /** Works without a Controller too; success means confirmed empty output and closed owners. */

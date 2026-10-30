@@ -477,20 +477,21 @@ export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
   /**
    * Computes a SHA‑256 hash for a given batch of subscriber items.
    */
-  private computeHashForBatch(messages: SubscriberQueueItem[]): string {
-    const data = JSON.stringify(messages.map((item) => this.serializeItem(item)));
+  private computeHashForBatch(messages: SubscriberQueueItem[], strict = false): string {
+    const data = JSON.stringify(messages.map((item) => strict ? { topic: item.topic, message: item.message } : this.serializeItem(item)));
     return createHash("sha256").update(data).digest("hex");
   }
 
   /**
    * Switch the subscriber to a passive state and return a snapshot.
    */
-  public async becomePassive(n: number): Promise<{ referenceHash: string; batchSize: number; }> {
+  public async becomePassive(n: number, strict = false): Promise<{ referenceHash: string; batchSize: number; }> {
     this.active = false;
     logger.info(`${this.instanceName} - Subscriber is passive.`);
+    while (this.inFlight > 0) await new Promise(resolve => setTimeout(resolve, 1));
     const batch = this.lastProcessedItems.slice(-n);
     const batchSize = batch.length;
-    const referenceHash = this.computeHashForBatch(batch);
+    const referenceHash = this.computeHashForBatch(batch, strict);
     if (batchSize > 0) {
       logger.info(`${this.instanceName} - Subscriber batch reference hash: ${referenceHash}, size: ${batchSize}`);
     }
@@ -500,6 +501,29 @@ export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
   /**
    * Switch the subscriber to an active state and resume processing.
    */
+  private preparedResume: number | undefined;
+
+  /** Validate a unique overlap without consuming input or activating this owner. */
+  public prepareResume(snapshot: { referenceHash: string; batchSize: number }): void {
+    if (this.active) throw Error("MQTT successor is not passive");
+    if (snapshot.batchSize === 0) { this.preparedResume = 0; return; }
+    const matches: number[] = [];
+    for (let i = 0; i <= this.queue.length - snapshot.batchSize; i++) {
+      if (this.computeHashForBatch(this.queue.slice(i, i + snapshot.batchSize), true) === snapshot.referenceHash)
+        matches.push(i + snapshot.batchSize);
+    }
+    if (matches.length !== 1) throw Error("MQTT input overlap is missing or ambiguous; successor stays passive");
+    this.preparedResume = matches[0];
+  }
+
+  public activatePreparedResume(): void {
+    if (this.active || this.preparedResume === undefined) throw Error("MQTT resume was not prepared");
+    this.queue = this.queue.slice(this.preparedResume);
+    this.preparedResume = undefined;
+    this.active = true;
+    void this.processQueue();
+  }
+
   public becomeActive(snapshot: { referenceHash: string; batchSize: number }): void {
     // If snapshot is empty (batchSize is zero), start processing from the beginning.
     if (snapshot.batchSize === 0 || snapshot.batchSize === undefined || snapshot.referenceHash === undefined) {

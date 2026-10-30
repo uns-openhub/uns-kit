@@ -163,6 +163,14 @@ export class MqttWorker {
         this.mqttProxy.subscribeAsync(msg.topics);
       } else if (msg && msg.command === "unsubscribeAsync" && msg.topics) {
         this.mqttProxy.unsubscribeAsync(msg.topics);
+      } else if (msg?.command === "prepareSubscriberResume" || msg?.command === "activatePreparedSubscriber") {
+        try {
+          if (msg.command === "prepareSubscriberResume") this.subscriber.prepareResume(msg.cursor);
+          else this.subscriber.activatePreparedResume();
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "success" });
+        } catch {
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "error", error: "MQTT subscriber resume not proven" });
+        }
       } else if (msg && msg.command === "setPublisherActive") {
         try { this.publisher.becomeActive({batchSize: msg?.batchSize, referenceHash: msg?.referenceHash}); }
         catch { parentPort?.postMessage({ command: "publishQueueControlError", error: "Persistent output cannot resume using a legacy skip hash" }); }
@@ -175,7 +183,7 @@ export class MqttWorker {
       } else if (msg && msg.command === "setSubscriberActive") {
         this.subscriber.becomeActive({batchSize: msg?.batchSize, referenceHash: msg?.referenceHash});
       } else if (msg && msg.command === "setSubscriberPassive") {
-        const snapshot = await this.subscriber.becomePassive(3);
+        const snapshot = await this.subscriber.becomePassive(3, msg.strict === true);
         parentPort?.postMessage({
           command: "handover_subscriber",
           ...snapshot

@@ -14,7 +14,7 @@ export interface ProjectAppConfig {
         processName: string;
         handover?: boolean;
         /** Opt-in controller-correlated MQTT handover protocol. */
-        handoverProtocol?: "correlated-v1" | undefined;
+        handoverProtocol?: ("correlated-v1" | "correlated-v2") | undefined;
         /** Optional PM2/controller supervisor guard settings for this RTT instance. */
         supervisor?: {
             /** Enable controller/PM2 supervisor handling for this RTT instance. */
