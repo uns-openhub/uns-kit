@@ -37,6 +37,8 @@ export type UnsProxyProcessPlugin = (api: UnsProxyProcessPluginApi) => void;
 
 class UnsProxyProcess {
   private active: boolean = false;
+  /** Ownership gate for timers/pollers. Not transport readiness or durability. */
+  public isActive(): boolean { return this.active && !this.shutdownPromise && !this.migrationDrainPromise; }
   private processStatusTopic: string;
   private processName: string;
   private processId: string;

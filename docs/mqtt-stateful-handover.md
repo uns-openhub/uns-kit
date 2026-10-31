@@ -78,6 +78,8 @@ const output = await runtime.createUnsMqttProxy(config.output.host, "output",
     handoverStateContract: "cumulative-kwh-v1",
     defaultPublishOptions: { qos: 1, retain: false },
   });
+// Admission can succeed before the RAM publisher reports a delivery failure.
+output.event.on("error", () => { publicationFailed = true; });
 input.event.on("input", event => {
   // Application owns parsing, paths, units, scaling and validation.
   const work = output.publishMqttMessage(parseReading(event), MessageMode.Both);
@@ -103,3 +105,37 @@ Controller's durable operation history or restart protection automatically.
 The control broker must authenticate clients and restrict access to the relevant
 handover/status topics. Operation IDs, process IDs and hashes are correlation and
 integrity checks, not signatures or a substitute for MQTT authorization.
+
+## Unitless data and background publication (3.0.36)
+
+State can contain strings and numbers without a physical unit. The absent `uom`
+remains absent on the wire and after import. Empty string and a named unit remain
+distinct. A format discriminator in the compatibility digest prevents an older
+required-unit reader from accepting this state after the source has frozen.
+Mixed 3.0.35/3.0.36 peers therefore refuse a live transfer before freeze, including
+numeric-only applications. Perform a separately reviewed initial cold upgrade;
+subsequent moves between updated peers preserve state normally.
+
+A passive successor starts with empty calculation/sequence state. Background
+metadata must wait for ownership, even if the transport is connected. For example:
+
+```ts
+let acceptingBackground = true;
+let nextRefresh = 0;
+const timer = setInterval(() => {
+  if (!acceptingBackground || !runtime.isActive() || Date.now() < nextRefresh) return;
+  nextRefresh = Date.now() + 86400000;
+  trackAccepted(publishMetadata());
+}, 250);
+// In handoverShutdown.onRelease: acceptingBackground = false; clearInterval(timer).
+// In handoverShutdown.drain: await every tracked publication; propagate failures.
+```
+
+Use the existing accepted-work tracker; do not drop input callbacks or replace
+SDK drain with a timer. `isActive()` does not prove delivery or database commit.
+
+A RAM-only publisher can reject or lose unacknowledged packets during a destination
+outage. Reconnection does not prove those packets were delivered. Keep an observed
+publication failure latched in the application drain and block a clean migration
+receipt, including a repeated request after reconnect. Review the uncertain range
+before a separate recovery; never clear this latch merely to complete a move.

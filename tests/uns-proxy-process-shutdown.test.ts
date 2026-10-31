@@ -58,7 +58,10 @@ describe("UnsProxyProcess shutdown", () => {
     );
     const { process, processMqttStop } = createProcessForShutdown([{ stop: proxyStop }]);
 
+    (process as any).active = true;
+    expect(process.isActive()).toBe(true);
     const firstShutdown = process.shutdown();
+    expect(process.isActive()).toBe(false);
     const secondShutdown = process.shutdown();
 
     expect(secondShutdown).toBe(firstShutdown);

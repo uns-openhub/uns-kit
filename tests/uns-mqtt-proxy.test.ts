@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { FakeWorker } = vi.hoisted(() => {
@@ -325,6 +326,34 @@ describe("generated numeric delta semantics", () => {
         expect(test.metadata()).toHaveLength(1);
       }
     } finally { await test.proxy.stop({ drain: false }); }
+  });
+
+  it("advertises a different state format before an old required-unit reader freezes input", async () => {
+    const current = setup();
+    try {
+      const old = createHash("sha256").update(JSON.stringify({contract:"counter-v1",host:"localhost",ssl:false,port:null,protocol:null,hosts:[],servers:[],subscriptions:[]})).digest("hex");
+      expect(current.proxy.getHandoverCompatibility().compatibility).not.toBe(old);
+    } finally { await current.proxy.stop({drain:false}); }
+  });
+
+  it.each(["source clock", 0, -12.5])("roundtrips data without a unit (%s) without inventing one", async value => {
+    const source = setup(), target = setup();
+    try {
+      const packet = reading(value);
+      delete packet.attributes[0]!.data!.uom;
+      packet.attributes[0]!.presentationKind = typeof value === "string" ? "text" : "chart";
+      await source.proxy.publishMqttMessage(packet, MessageMode.Raw);
+      const snapshot = source.proxy.exportHandoverState({batchSize:0,referenceHash:"a".repeat(64)});
+      const wire = JSON.parse(JSON.stringify(snapshot));
+      expect(wire.values[0]).not.toHaveProperty("uom");
+      target.proxy.importHandoverState(wire);
+      expect(target.proxy.exportHandoverState(snapshot.cursor).values[0].uom).toBeUndefined();
+      const next = reading(value, 5); delete next.attributes[0]!.data!.uom;
+      await target.proxy.publishMqttMessage(next, MessageMode.Raw);
+      expect(target.packets()[0].packet.message.data).not.toHaveProperty("uom");
+      expect(target.packets()[0].packet.interval).toBe(5000);
+      expect(target.packets()[0].packet.sequenceId).toBe(source.packets()[0].packet.sequenceId + 1);
+    } finally { await source.proxy.stop({drain:false}); await target.proxy.stop({drain:false}); }
   });
 
   it("imports unchanged paths but starts new paths and changed units with a fresh baseline", async () => {

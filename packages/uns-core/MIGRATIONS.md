@@ -9,6 +9,22 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.36 - Unitless state and passive background publishers
+
+When crossing `<3.0.36` to `>=3.0.36`, MQTT handover preserves absent units
+for strings and unitless numeric data. It never substitutes an empty string or
+an invented physical unit. The optional-unit state format is bound into the
+compatibility offer: mixed 3.0.35/3.0.36 stateful peers reject before freezing the
+source. Review an initial stop-before-start upgrade, then use matching updated
+peers for live moves. Do not bypass this refusal by relabeling a contract.
+
+A passive successor must not publish startup metadata or poll results before
+state import. Gate background work with `UnsProxyProcess.isActive()` and stop it
+in `handoverShutdown.onRelease`; keep tracking all accepted asynchronous work.
+This getter is an ownership signal, not broker connectivity or archive readiness.
+Input callbacks already delivered by the SDK must still finish during drain.
+Legacy configurations and persistent-output ownership rules are unchanged.
+
 ## 3.0.35 - Opt-in state-preserving MQTT handover
 
 When crossing `<3.0.35` to `>=3.0.35`, existing applications keep their current

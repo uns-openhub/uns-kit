@@ -1,4 +1,4 @@
-import { mqttProxyHandoverStateSchema, type MqttProxyHandoverState } from "../runtime/mqtt-handover-state.js";
+import { MQTT_HANDOVER_STATE_FORMAT, mqttProxyHandoverStateSchema, type MqttProxyHandoverState } from "../runtime/mqtt-handover-state.js";
 import { assertDisabledPublishQueueEmpty } from "./disabled-publish-queue.js";
 import { randomUUID, createHash } from "node:crypto";
 import { mqttPublishQueueIdentity, mqttPublishQueueSchema, type MqttPublishQueueStatus } from "./publish-queue-contract.js";
@@ -89,7 +89,7 @@ type InternalMqttMessage = {
 export default class UnsMqttProxy extends UnsProxy {
   public static readonly DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
   private readonly stateCompatibility: string | undefined;
-  private lastValues: Map<string, { value: ValueType; uom: string; timestamp: Date }> = new Map();
+  private lastValues: Map<string, { value: ValueType; uom: string | undefined; timestamp: Date }> = new Map();
   private worker: Worker;
   private pendingEnqueues: Map<string, { resolve: () => void; reject: (reason?: any) => void }> = new Map();
   private pendingPublishCompletions = new Set<string>();
@@ -131,7 +131,7 @@ export default class UnsMqttProxy extends UnsProxy {
     if (contract !== undefined && (typeof contract !== "string" || !contract.trim() || contract.length > 256)) throw Error("Invalid MQTT state compatibility contract");
     // Bind state to semantic revision and actual endpoints/subscriptions, never credentials or client IDs.
     this.stateCompatibility = contract ? createHash("sha256").update(JSON.stringify({
-      contract, host: mqttHost, ssl: unsParameters?.mqttSSL ?? false,
+      stateFormat: MQTT_HANDOVER_STATE_FORMAT, contract, host: mqttHost, ssl: unsParameters?.mqttSSL ?? false,
       port: unsParameters?.port ?? null, protocol: unsParameters?.protocol ?? null,
       hosts: unsParameters?.hosts ?? [], servers: unsParameters?.servers ?? [],
       subscriptions: [unsParameters?.mqttSubToTopics ?? []].flat().slice().sort(),
