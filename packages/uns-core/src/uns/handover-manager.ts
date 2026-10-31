@@ -1,3 +1,4 @@
+import { cloneApplicationHandoverState, type ApplicationHandoverState } from "../runtime/application-handover-state.js";
 import { mqttHandoverOfferSchema, parseMqttHandoverState, mqttHandoverStateDigest, type MqttHandoverState } from "../runtime/mqtt-handover-state.js";
 import logger from "../logger.js";
 import { runHandoverShutdown, validateHandoverShutdown, type HandoverShutdownHooks } from "./handover-shutdown.js";
@@ -58,6 +59,7 @@ export class HandoverManager {
     handoverId?: string,
     shutdownHooks?: HandoverShutdownHooks,
     private readonly statefulHandover = false,
+    private readonly applicationState?: ApplicationHandoverState,
   ) {
     validateHandoverShutdown(shutdownHooks);
     this.shutdownHooks = shutdownHooks ? { ...shutdownHooks } : undefined;
@@ -78,16 +80,16 @@ export class HandoverManager {
     );
 
     // Set status as active after a timeout if no other active process are detected.
-    this.activeTimeout = setTimeout(() => {
+    this.activeTimeout = setTimeout(async () => {
       if (this.statefulHandover && this.handoverId) return; // A reviewed successor never self-promotes.
       logger.info(`${this.processName} - No active message received within timeout. Assuming no other process is running.`);
+      for (const proxy of this.unsMqttProxies) proxy.setPublisherActive();
+      try { await this.activateApplication(); }
+      catch { logger.error("Runtime activation failed; successor remains passive"); return; }
       this.active = true;
       this.event.emit("handoverManager", { active: this.active });
-      // Activate all UNS proxy instance publishers and subscribers.
-      this.unsMqttProxies.forEach((unsProxy) => {
-        unsProxy.setPublisherActive();
-        unsProxy.setSubscriberActive();
-      });
+      // Publishers were prepared for application activation; input opens last.
+      this.unsMqttProxies.forEach((unsProxy) => unsProxy.setSubscriberActive());
     }, ACTIVE_TIMEOUT);
   }
 
@@ -212,7 +214,7 @@ export class HandoverManager {
           setTimeout(async () => {
             logger.info(`${this.processName} - Requesting handover ${eventHandoverTopic}.`);
             this.handoverInProgress = true;
-            await this.mqttProxy.publish(eventHandoverTopic, this.handoverPayload("handover_request", undefined, this.statefulHandover ? { offer: this.unsMqttProxies.map(proxy => proxy.getHandoverCompatibility()) } : {}), {
+            await this.mqttProxy.publish(eventHandoverTopic, this.handoverPayload("handover_request", undefined, this.statefulHandover ? { offer: this.unsMqttProxies.map(proxy => proxy.getHandoverCompatibility()), applicationContract: this.applicationState?.contract } : {}), {
               retain: false,
               properties: {
                 responseTopic: this.topicBuilder.getHandoverTopic(),
@@ -227,13 +229,12 @@ export class HandoverManager {
             logger.warn(`${this.processName} - Warning: Source and destination being the same may lead to duplicate messages.`);
             clearTimeout(this.activeTimeout); // Clear the active timeout if it exists - prevent this process from becoming active after a timeout.
             this.activeTimeout = undefined;
+            for (const proxy of this.unsMqttProxies) proxy.setPublisherActive();
+            await this.activateApplication();
             this.active = true;
             this.event.emit("handoverManager", { active: this.active });
             // Activate all UNS proxy instance publishers and subscribers.
-            this.unsMqttProxies.forEach((unsProxy) => {
-              unsProxy.setPublisherActive();
-              unsProxy.setSubscriberActive();
-            });
+            this.unsMqttProxies.forEach((unsProxy) => unsProxy.setSubscriberActive());
           } else {
             logger.info(`${this.processName} - Waiting for the other process on topic ${event.topic} to become passive.`);
             this.activeTimeout?.refresh();
@@ -283,7 +284,10 @@ export class HandoverManager {
       // Finish accepted application callbacks before taking the calculation-state boundary.
       await this.shutdownHooks?.drain();
       for (const proxy of this.unsMqttProxies) await proxy.flush();
-      this.preparedState = parseMqttHandoverState({ protocol: 1, proxies: this.unsMqttProxies.map((proxy, i) =>
+      const application = this.applicationState ? { contract: this.applicationState.contract,
+        data: cloneApplicationHandoverState(this.applicationState.exportState()) } : undefined;
+      if (application) this.applicationState!.validateState(application.data);
+      this.preparedState = parseMqttHandoverState({ protocol: 1, ...(application ? { application } : {}), proxies: this.unsMqttProxies.map((proxy, i) =>
         proxy.exportHandoverState({ batchSize: mqttWorkerData[i].batchSize, referenceHash: mqttWorkerData[i].referenceHash })) });
       this.stateDigest = mqttHandoverStateDigest(this.preparedState);
       await this.sendPreparedState(event, handoverId);
@@ -350,6 +354,8 @@ export class HandoverManager {
     const state = parseMqttHandoverState(response.state);
     const digest = mqttHandoverStateDigest(state);
     if (digest !== response.stateDigest) throw Error("MQTT handover state digest mismatch");
+    if (state.application?.contract !== this.applicationState?.contract) throw Error("Application handover contract differs");
+    if (state.application) this.applicationState!.validateState(state.application.data);
     const byName = new Map(this.unsMqttProxies.map(proxy => [proxy.instanceName, proxy]));
     if (byName.size !== this.unsMqttProxies.length || state.proxies.length !== byName.size || state.proxies.some(p => !byName.has(p.instanceName)))
       throw Error("MQTT handover proxy set differs");
@@ -357,11 +363,37 @@ export class HandoverManager {
     // Validate every cursor before importing any state or activating any subscriber.
     for (const snapshot of state.proxies) await byName.get(snapshot.instanceName)!.prepareHandoverResume(snapshot.cursor);
     for (const snapshot of state.proxies) byName.get(snapshot.instanceName)!.importHandoverState(snapshot);
+    if (state.application) await this.applicationState!.importState(state.application.data);
     for (const proxy of this.unsMqttProxies) proxy.setPublisherActive();
-    for (const proxy of this.unsMqttProxies) await proxy.activateHandoverResume();
+    await this.activateApplication();
+    try {
+      for (const proxy of this.unsMqttProxies) await proxy.activateHandoverResume();
+    } catch {
+      await this.deactivateApplication();
+      throw Error("MQTT input activation failed; successor remains passive");
+    }
     this.acceptedStateDigest = digest;
     this.active = true;
     this.event.emit("handoverManager", { active: true });
+  }
+
+  private async activateApplication(): Promise<void> {
+    try { await this.shutdownHooks?.onActivate?.(); }
+    catch {
+      await this.deactivateApplication();
+      throw Error("Application activation failed; successor remains passive");
+    }
+  }
+
+  private async deactivateApplication(): Promise<void> {
+    this.active = false;
+    try { this.shutdownHooks?.onRelease?.(); } catch { /* Keep admission closed if cleanup itself fails. */ }
+    // A failed worker may not acknowledge the stop. Request passive input on
+    // every peer, close outputs, and never acknowledge ownership as successful.
+    for (const proxy of this.unsMqttProxies) {
+      void Promise.resolve().then(() => proxy.setSubscriberPassive(true)).catch((): void => {});
+    }
+    await Promise.allSettled(this.unsMqttProxies.map(proxy => Promise.resolve().then(() => proxy.setPublisherPassive())));
   }
 
   private async finishSourceHandover(): Promise<void> {
@@ -409,6 +441,11 @@ export class HandoverManager {
         if (this.sourcePeerId || !this.active || !peerId || typeof replyTopic !== "string" || !replyTopic) return;
         if (this.statefulHandover) {
           // Reject incompatible upgrades before freezing the current owner.
+          if (response.applicationContract !== this.applicationState?.contract) throw Error("Application handover contract differs; source remains active");
+          if (this.applicationState) {
+            const preliminary = cloneApplicationHandoverState(this.applicationState.exportState());
+            this.applicationState.validateState(preliminary);
+          }
           const offer = mqttHandoverOfferSchema.parse(response.offer);
           const own = this.unsMqttProxies.map(proxy => proxy.getHandoverCompatibility());
           if (offer.length !== own.length || own.some(p => !offer.some(o => o.instanceName === p.instanceName && o.compatibility === p.compatibility)))

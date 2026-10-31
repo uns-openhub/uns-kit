@@ -49,3 +49,6 @@ export type {
 
 export { mqttPublishQueueSchema } from "./uns-mqtt/publish-queue-contract.js";
 export type { MqttPublishQueueOptions, MqttPublishQueueStatus } from "./uns-mqtt/publish-queue-contract.js";
+
+export { ProcessWork } from "./runtime/process-work.js";
+export { createApplicationHandoverContract, cloneApplicationHandoverState, type ApplicationHandoverState } from "./runtime/application-handover-state.js";

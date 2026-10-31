@@ -1,4 +1,5 @@
 import type { MqttPublishQueueOptions } from "../uns-mqtt/publish-queue-contract.js";
+import type { ApplicationHandoverState } from "../runtime/application-handover-state.js";
 import type { HandoverShutdownHooks } from "./handover-shutdown.js";
 import { UnsAttributeType } from "../graphql/schema.js";
 import { MeasurementUnit } from "./uns-measurements.js";
@@ -150,6 +151,10 @@ export interface IUnsParameters {
 }
 
 export interface IUnsProcessParameters {
+  /** Wait for explicit application readiness before initial ownership. */
+  deferHandoverUntilReady?: boolean;
+  /** Optional bounded application RAM state transferred with the reviewed SDK handover. */
+  handoverState?: ApplicationHandoverState;
   /** Optional application drain after a cooperative handover. Register before creating proxies. */
   handoverShutdown?: HandoverShutdownHooks;
   processName: string;

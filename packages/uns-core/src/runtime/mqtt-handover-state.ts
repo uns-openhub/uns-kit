@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
+import { cloneApplicationHandoverState } from './application-handover-state.js';
 
 // Same contract for every SDK MQTT consumer. No application/profile selectors.
 // Bound into peer compatibility so older required-unit readers reject before freeze.
@@ -26,6 +27,7 @@ export const mqttProxyHandoverStateSchema = z.strictObject({
 });
 export const mqttHandoverStateSchema = z.strictObject({
   protocol: z.literal(1),
+  application: z.strictObject({ contract: z.string().min(1).max(128), data: z.unknown() }).optional(),
   proxies: z.array(mqttProxyHandoverStateSchema).max(64),
 }).superRefine((state, ctx) => {
   if (new Set(state.proxies.map(p => p.instanceName)).size !== state.proxies.length)
@@ -36,7 +38,9 @@ export type MqttHandoverState = z.infer<typeof mqttHandoverStateSchema>;
 export function parseMqttHandoverState(input: unknown): MqttHandoverState {
   const json = JSON.stringify(input);
   if (!json || Buffer.byteLength(json) > MQTT_HANDOVER_STATE_MAX_BYTES) throw Error('MQTT handover state exceeds its bound');
-  return mqttHandoverStateSchema.parse(input);
+  const state = mqttHandoverStateSchema.parse(input);
+  if (state.application) state.application.data = cloneApplicationHandoverState(state.application.data);
+  return state;
 }
 export function mqttHandoverStateDigest(state: MqttHandoverState): string {
   return createHash('sha256').update(JSON.stringify(parseMqttHandoverState(state))).digest('hex');

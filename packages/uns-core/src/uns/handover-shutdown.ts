@@ -1,5 +1,7 @@
 /** Application-owned work is separate from the MQTT subscriber handover. */
 export interface HandoverShutdownHooks {
+  /** Prepared successor: restore application owners before admitting MQTT/background work. */
+  onActivate?: () => Promise<void>;
   /** Synchronous: stop admitting new background work when releasing ownership. */
   onRelease?: () => void;
   /** After target acknowledgement: finish accepted work and close writers. Never call process.exit here. */
@@ -10,7 +12,7 @@ export interface HandoverShutdownHooks {
 
 export function validateHandoverShutdown(hooks?: HandoverShutdownHooks): void {
   if (!hooks) return;
-  if (typeof hooks.drain !== "function" || (hooks.onRelease !== undefined && typeof hooks.onRelease !== "function")) {
+  if ((hooks.onActivate !== undefined && typeof hooks.onActivate !== "function") || typeof hooks.drain !== "function" || (hooks.onRelease !== undefined && typeof hooks.onRelease !== "function")) {
     throw new TypeError("Invalid handover shutdown hooks.");
   }
   const timeout = hooks.timeoutMs ?? 30_000;

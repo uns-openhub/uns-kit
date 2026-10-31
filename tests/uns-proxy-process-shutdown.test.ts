@@ -13,6 +13,8 @@ function createProcessForShutdown(proxyStops: ProxyStop[], processMqttStop = vi.
   process.statusMonitor = { stop: statusMonitorStop, publishInactiveStatus };
   process.mqttInputHandler = undefined;
   process.unsMqttProxies = proxyStops;
+  process.unsApiProxies = [];
+  process.lifecycleParticipants = [];
   process.processMqttProxy = {
     event: { off: vi.fn() },
     stop: processMqttStop,

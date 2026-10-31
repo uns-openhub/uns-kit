@@ -34,6 +34,22 @@ const buildSwaggerPath = (base: string, processName: string, instanceName: strin
 
 export default class App {
   private expressApplication: Application;
+  private ownershipGate: (() => boolean) | undefined;
+  private readonly acceptedRequests = new Set<Promise<void>>();
+  private requestFailed = false;
+
+  public setOwnershipGate(gate: () => boolean): void { this.ownershipGate = gate; }
+  public async drainRequests(): Promise<void> {
+    while (this.acceptedRequests.size) await Promise.all([...this.acceptedRequests]);
+    if (this.requestFailed) throw new Error("An accepted HTTP request ended without confirmation");
+  }
+  public async stop(): Promise<void> {
+    await this.drainRequests();
+    if (this.server.listening) await new Promise<void>((resolve, reject) => {
+      this.server.close(error => error ? reject(error) : resolve());
+      this.server.closeIdleConnections?.();
+    });
+  }
   public server;
   private port;
   public router: Router;
@@ -62,6 +78,23 @@ export default class App {
     this.port = port;
     this.expressApplication = express();
     this.server = http.createServer(this.expressApplication);
+    this.expressApplication.use((_req, res, next) => {
+      if (!this.ownershipGate) return next();
+      if (!this.ownershipGate()) {
+        res.setHeader("Retry-After", "1");
+        res.status(503).json({ error: "RUNTIME_PASSIVE", message: "Runtime ownership is being transferred. Retry the request." });
+        return;
+      }
+      let finish!: () => void;
+      const accepted = new Promise<void>(resolve => { finish = resolve; });
+      this.acceptedRequests.add(accepted);
+      res.once("finish", () => { this.acceptedRequests.delete(accepted); finish(); });
+      res.once("close", () => {
+        if (!res.writableFinished) this.requestFailed = true;
+        this.acceptedRequests.delete(accepted); finish();
+      });
+      next();
+    });
     this.processName = processName;
     this.instanceName = instanceName;
     this.apiBasePrefix =

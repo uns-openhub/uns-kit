@@ -16,7 +16,9 @@ const unsCronPlugin: UnsProxyProcessPlugin = ({ define }) => {
   define({
     async createCrontabProxy(this: UnsProxyProcess, cronInput: CronScheduleInput, options?: CronProxyOptions) {
       await this.waitForProcessConnection();
-      const unsCronProxy = new UnsCronProxy(cronInput, options);
+      const unsCronProxy = new UnsCronProxy(cronInput, options,
+        () => !this.usesStatefulHandover() || this.isActive());
+      this.registerLifecycleParticipant({ onRelease: () => { void unsCronProxy.stop(); }, drain: () => unsCronProxy.stop() });
       getCronProxies(this).push(unsCronProxy);
       return unsCronProxy;
     },

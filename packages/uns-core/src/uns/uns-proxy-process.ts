@@ -1,3 +1,4 @@
+import { validateApplicationHandoverContract, type ApplicationHandoverState } from "../runtime/application-handover-state.js";
 import { MQTT_DRAIN_HANDLER, MQTT_DRAIN_READY_EVENT, drainMqttForMigration, type MqttDrainReceipt } from "../runtime/mqtt-drain.js";
 import { randomBytes } from "crypto";
 
@@ -44,6 +45,29 @@ class UnsProxyProcess {
   private processId: string;
   private handoverId: string | undefined;
   private statefulHandover: boolean = false;
+  private applicationHandoverState?: ApplicationHandoverState;
+  private handoverReady = true;
+  private pendingHandover?: { instanceMode: string; handover: boolean };
+  private readyToActivate: Promise<void> = Promise.resolve();
+  private markReady?: () => void;
+  private signalCleanupInstalled = false;
+  private lifecycleParticipants: HandoverShutdownHooks[] = [];
+  public usesStatefulHandover(): boolean { return this.statefulHandover; }
+  public registerLifecycleParticipant(hooks: HandoverShutdownHooks): void {
+    validateHandoverShutdown(hooks);
+    this.lifecycleParticipants.push(hooks);
+  }
+  /** API-only runtimes explicitly initialize the same ownership protocol as MQTT apps. */
+  public async prepareHandover(instanceMode: string, handover: boolean): Promise<void> {
+    await this.waitForProcessConnection();
+    if (!this.handoverManager) {
+      if (!this.handoverReady) {
+        if (this.pendingHandover && (this.pendingHandover.instanceMode !== instanceMode || this.pendingHandover.handover !== handover))
+          throw Error("All proxies in one owner must use the same handover configuration");
+        this.pendingHandover = { instanceMode, handover };
+      } else this.initHandoverManager(instanceMode, handover, this.handoverId);
+    }
+  }
   private handoverShutdown: HandoverShutdownHooks | undefined;
   private unsMqttProxies: UnsMqttProxy[];
   private unsApiProxies: unknown[];
@@ -112,8 +136,30 @@ class UnsProxyProcess {
       throw new Error("UnsProxyProcess requires a processName in configuration.");
     }
     validateHandoverShutdown(unsProxyProcessParameters.handoverShutdown);
-    this.handoverShutdown = unsProxyProcessParameters.handoverShutdown
-      ? { ...unsProxyProcessParameters.handoverShutdown } : undefined;
+    validateApplicationHandoverContract(unsProxyProcessParameters.handoverState);
+    this.applicationHandoverState = unsProxyProcessParameters.handoverState;
+    if (unsProxyProcessParameters.deferHandoverUntilReady) {
+      this.handoverReady = false;
+      this.readyToActivate = new Promise(resolve => { this.markReady = resolve; });
+    }
+    const suppliedHooks = unsProxyProcessParameters.handoverShutdown;
+    this.handoverShutdown = {
+      timeoutMs: suppliedHooks?.timeoutMs ?? 30_000,
+      onRelease: () => {
+        suppliedHooks?.onRelease?.();
+        for (const hooks of this.lifecycleParticipants) hooks.onRelease?.();
+      },
+      onActivate: async () => {
+        await this.readyToActivate;
+        await suppliedHooks?.onActivate?.();
+        for (const hooks of this.lifecycleParticipants) await hooks.onActivate?.();
+      },
+      drain: async () => {
+        // HTTP requests finish before application-owned resources are closed.
+        for (const hooks of this.lifecycleParticipants) await hooks.drain();
+        await suppliedHooks?.drain();
+      },
+    };
     this.statefulHandover = unsProxyProcessParameters.handoverProtocol === "correlated-v2";
     this.processName = unsProxyProcessParameters.processName;
     this.processId = randomBytes(16).toString("hex");
@@ -197,6 +243,7 @@ class UnsProxyProcess {
       handoverId,
       this.handoverShutdown,
       this.statefulHandover,
+      this.applicationHandoverState,
     );
 
     // Listen for handover events.
@@ -206,6 +253,7 @@ class UnsProxyProcess {
 
     // Delegate MQTT events to the HandoverManager.
     this.mqttInputHandler = async (event: UnsEvents["input"]) => {
+      if (this.handoverReady === false) return;
       await this.handoverManager.handleMqttMessage(event);
     };
     this.processMqttProxy.event.on("input", this.mqttInputHandler);
@@ -227,20 +275,16 @@ class UnsProxyProcess {
     // Wait until the MQTT connection is established before proceeding.
     await this.waitForProcessConnection();
 
-    // Currently handover manager can handle only mqtt events
-    if (!this.handoverManager) {
-      this.initHandoverManager(
-        instanceMode,
-        handover,
-        this.handoverId,
-      );
-    }
+    await this.prepareHandover(instanceMode, handover);
 
     const resolvedUnsParameters: IUnsParameters = {
       ...(unsParameters ?? {}),
       clientId: unsParameters?.clientId ?? `${this.processName}-${instanceName}-${this.processId}`,
     };
     if (this.statefulHandover && !resolvedUnsParameters?.handoverStateContract) throw Error("correlated-v2 requires a calculation-state contract for every MQTT proxy");
+    if (this.statefulHandover && this.applicationHandoverState) {
+      resolvedUnsParameters.handoverStateContract += `|application:${this.applicationHandoverState.contract}`;
+    }
     const unsMqttProxy = new UnsMqttProxy(mqttHost, this.processName, instanceName, resolvedUnsParameters);
 
     // Listen for UNS proxy producing topics and publish them via MQTT.
@@ -287,12 +331,28 @@ class UnsProxyProcess {
 
   /** Call after application input handlers and shutdown hooks are prepared. */
   public enableMigrationDrain(): void {
+    this.handoverReady = true;
+    this.markReady?.();
+    if (this.pendingHandover && !this.handoverManager)
+      this.initHandoverManager(this.pendingHandover.instanceMode, this.pendingHandover.handover, this.handoverId);
+    if (this.statefulHandover && !this.handoverManager) throw Error("Initialize handover before advertising runtime readiness");
     const registry = globalThis as unknown as Record<symbol, unknown>;
     if (this.migrationDrainHandler) return;
     if (registry[MQTT_DRAIN_HANDLER]) throw Error("One migration drain owner is allowed per process");
     this.migrationDrainHandler = () => this.drainForMigration();
     registry[MQTT_DRAIN_HANDLER] = this.migrationDrainHandler;
     (process as unknown as { emit(event: string, value: unknown): boolean }).emit(MQTT_DRAIN_READY_EVENT, { protocol: 1, ...(this.statefulHandover ? { handoverProtocol: 2 } : {}) });
+  }
+
+  /** Optional single signal owner for applications without their own cleanup handler. */
+  public installSignalHandlers(): void {
+    if (this.signalCleanupInstalled) return;
+    this.signalCleanupInstalled = true;
+    const stop = () => {
+      void this.drainForMigration().then(() => process.exit(0), () => process.exit(1));
+    };
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
   }
 
   /** Works without a Controller too; success means confirmed empty output and closed owners. */
@@ -347,6 +407,12 @@ class UnsProxyProcess {
       }
     }
 
+    for (const hooks of this.lifecycleParticipants) {
+      try { hooks.onRelease?.(); await hooks.drain(); } catch (e) { shutdownErrors.push(e instanceof Error ? e : new Error("Lifecycle cleanup failed")); }
+    }
+    for (const proxy of this.unsApiProxies as { stop(): Promise<void> }[]) {
+      try { await proxy.stop(); } catch (e) { shutdownErrors.push(e instanceof Error ? e : new Error("API cleanup failed")); }
+    }
     const proxyStopResults = await Promise.allSettled(this.unsMqttProxies.map((proxy) => proxy.stop(options)));
     for (const result of proxyStopResults) {
       if (result.status === "rejected") {

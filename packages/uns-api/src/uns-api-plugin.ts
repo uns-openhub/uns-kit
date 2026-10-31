@@ -28,16 +28,32 @@ const unsApiPlugin: UnsProxyProcessPlugin = ({ define }) => {
       };
 
       const unsApiProxy = new UnsApiProxy(internals.processName, instanceName, options);
+      let owned = !this.usesStatefulHandover() || this.isActive();
+      const deferredMetadata = new Map<string, string>();
+      const publishMetadata = (topic: string, payload: string): Promise<unknown> | undefined => {
+        if (!owned) { deferredMetadata.set(topic, payload); return; }
+        return internals.processMqttProxy.publish(topic, payload);
+      };
+      if (this.usesStatefulHandover()) unsApiProxy.setOwnershipGate(() => owned);
+      this.registerLifecycleParticipant({
+        onRelease: () => { owned = false; },
+        drain: () => unsApiProxy.drainRequests(),
+        onActivate: async () => {
+          owned = true;
+          for (const [topic, payload] of deferredMetadata) await publishMetadata(topic, payload);
+          deferredMetadata.clear();
+        },
+      });
 
       unsApiProxy.event.on("unsProxyProducedTopics", (event) => {
-        internals.processMqttProxy.publish(
+        publishMetadata(
           event.statusTopic,
           JSON.stringify(event.producedTopics),
         );
       });
 
       unsApiProxy.event.on("unsProxyProducedApiEndpoints", (event) => {
-        internals.processMqttProxy.publish(
+        publishMetadata(
           event.statusTopic,
           JSON.stringify(event.producedApiEndpoints),
         );
@@ -47,7 +63,7 @@ const unsApiPlugin: UnsProxyProcessPlugin = ({ define }) => {
         statusTopic: string;
         producedServiceEndpoints: unknown[];
       }) => {
-        internals.processMqttProxy.publish(
+        publishMetadata(
           event.statusTopic,
           JSON.stringify(event.producedServiceEndpoints),
         );
@@ -57,14 +73,14 @@ const unsApiPlugin: UnsProxyProcessPlugin = ({ define }) => {
         statusTopic: string;
         producedDataOfferEndpoints: unknown[];
       }) => {
-        internals.processMqttProxy.publish(
+        publishMetadata(
           event.statusTopic,
           JSON.stringify(event.producedDataOfferEndpoints),
         );
       });
 
       unsApiProxy.event.on("unsProxyProducedApiCatchAll", (event) => {
-        internals.processMqttProxy.publish(
+        publishMetadata(
           event.statusTopic,
           JSON.stringify(event.producedCatchall),
         );
@@ -74,7 +90,7 @@ const unsApiPlugin: UnsProxyProcessPlugin = ({ define }) => {
         statusTopic: string;
         producedDataCatalogOffers: unknown[];
       }) => {
-        internals.processMqttProxy.publish(
+        publishMetadata(
           event.statusTopic,
           JSON.stringify(event.producedDataCatalogOffers),
         );
@@ -84,7 +100,7 @@ const unsApiPlugin: UnsProxyProcessPlugin = ({ define }) => {
         const time = UnsPacket.formatToISO8601(new Date());
         const unsMessage: IUnsMessage = { data: { time, value: event.value, uom: event.uom } };
         UnsPacket.unsPacketFromUnsMessage(unsMessage).then((packet) => {
-          internals.processMqttProxy.publish(
+          publishMetadata(
             event.statusTopic,
             JSON.stringify(packet),
           );

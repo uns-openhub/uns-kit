@@ -127,6 +127,9 @@ export default class UnsApiProxy extends UnsProxy {
     this.statusInterval = setInterval(() => this.emitStatusMetrics(), this.statusIntervalMs);
   }
 
+  public setOwnershipGate(gate: () => boolean): void { this.app.setOwnershipGate(gate); }
+  public async drainRequests(): Promise<void> { await this.app.drainRequests(); }
+
   public getProcessName(): string {
     return this.processName;
   }
@@ -874,6 +877,7 @@ export default class UnsApiProxy extends UnsProxy {
       clearInterval(this.statusInterval);
       this.statusInterval = null;
     }
+    await this.app.stop();
     await super.stop();
   }
 

@@ -64,13 +64,14 @@ const normalizeCronSchedules = (
 export default class UnsCronProxy extends UnsProxy {
   private readonly tasks: ScheduledTask[];
 
-  constructor(cronInput: CronScheduleInput, options?: CronProxyOptions) {
+  constructor(cronInput: CronScheduleInput, options?: CronProxyOptions, private readonly active: () => boolean = () => true) {
     super();
     const schedules = normalizeCronSchedules(cronInput, options);
     this.tasks = schedules.map((schedule) =>
       cron.schedule(
         schedule.cronExpression,
         () => {
+          if (!this.active()) return;
           this.event.emit("cronEvent", {
             event: schedule.event,
             cronExpression: schedule.cronExpression,

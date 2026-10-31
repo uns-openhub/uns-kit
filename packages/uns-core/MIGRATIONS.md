@@ -9,6 +9,61 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.37 - Application lifecycle, HTTP ownership and bounded RAM state
+
+When crossing `<3.0.37` to `>=3.0.37`, existing non-opt-in consumers retain their
+protocol. The API plugin now closes its HTTP server on shutdown and the cron
+plugin stops owned schedules. Review existing signal handlers so one owner calls
+`drainForMigration()` and reports an unsuccessful drain honestly.
+
+For stateful live migration, pass `uns.handoverProtocol` to `UnsProxyProcess`,
+set `deferHandoverUntilReady: true`, install every handler and participant, then
+call `enableMigrationDrain()`. API-only applications call
+`await runtime.prepareHandover(config.uns.instanceMode, config.uns.handover)`
+before that readiness declaration. Use `installSignalHandlers()` only when the
+application has no signal owner already. Declare `unsDatahub.mqttDrain` protocol1
+and `unsDatahub.mqttHandover` protocol2 only after this actual wiring is verified.
+
+Use the shared `ProcessWork` to track accepted asynchronous work. Stop timer and
+poller admission in `handoverShutdown.onRelease`; await `accepted.drain()` in
+`handoverShutdown.drain`. `handoverShutdown.onActivate` prepares application
+owners before successor input resumes. Do not discard already admitted input by
+checking `isActive()` in its callback. Do gate new background work. A failed or
+uncertain output stays latched and blocks a successful receipt.
+
+Applications with RAM state additionally supply `handoverState: { contract,
+exportState, validateState, importState }`. Use a stable semantic contract, check
+all fields before mutating anything, and include unfinished windows, active
+session IDs, original timestamps, conditions and counters. The shared transport
+bounds plain JSON to 768 KiB, depth32/50,000 nodes within its 1 MiB envelope.
+It refuses oversized state without truncation. Keep credentials and executable
+objects out of snapshots. Matching unchanged MQTT-only consumers retain format2;
+applications opting into new state require matching contracts on both peers.
+Do not bypass a refused comparison with a relabelled contract.
+
+Example:
+
+```ts
+const accepted = new ProcessWork();
+const runtime = new UnsProxyProcess(host, {
+  processName, handoverProtocol: config.uns.handoverProtocol,
+  deferHandoverUntilReady: true,
+  handoverShutdown: { onRelease: stopTimers, drain: () => accepted.drain() },
+  handoverState: {
+    contract: 'accumulator-v1', exportState: () => accumulator,
+    validateState: value => accumulatorSchema.parse(value),
+    importState: value => { accumulator = accumulatorSchema.parse(value); },
+  },
+});
+```
+
+The API plugin keeps passive routes unpublished, rejects passive requests with a
+retryable 503 and drains accepted requests. Cron work is gated by ownership.
+These mechanisms do not move disk queues or eliminate every routing gap. An
+unknown external effect remains uncertain; reconcile the original operation and
+use a reviewed reverse handover for return ownership. Ordinary SDK version
+alignment alone does not enable a live migration.
+
 ## 3.0.36 - Unitless state and passive background publishers
 
 When crossing `<3.0.36` to `>=3.0.36`, MQTT handover preserves absent units
