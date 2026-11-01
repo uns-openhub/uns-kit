@@ -16,6 +16,13 @@ type MountConfig = {
   disableDefaultApiMount?: boolean;
 };
 
+type AcceptedRequest = {
+  transportEnded: boolean;
+  readOnly: boolean;
+  workSettled: boolean;
+  complete: () => void;
+};
+
 const normalizeBasePrefix = (value?: string | null): string => {
   if (!value) return "";
   const trimmed = value.trim();
@@ -36,9 +43,34 @@ export default class App {
   private expressApplication: Application;
   private ownershipGate: (() => boolean) | undefined;
   private readonly acceptedRequests = new Set<Promise<void>>();
+  private readonly requestWork = new WeakMap<Response, AcceptedRequest>();
   private requestFailed = false;
 
   public setOwnershipGate(gate: () => boolean): void { this.ownershipGate = gate; }
+
+  /**
+   * Declare application-owned read-only work before its first asynchronous step.
+   * HTTP method names are not proof of safety: only use this for work without
+   * external effects. A disconnected reader still waits for actual work to settle.
+   * This does not authenticate, cancel, retry or send the response.
+   */
+  public async runReadOnlyRequest<T>(res: Response, operation: () => T | Promise<T>): Promise<T> {
+    const request = this.requestWork.get(res);
+    if (!request && this.ownershipGate) throw new Error("HTTP request was not admitted by this runtime");
+    if (request) {
+      if (request.transportEnded || request.readOnly) throw new Error("HTTP work must be declared once before the response ends");
+      request.readOnly = true;
+      request.workSettled = false;
+    }
+    try {
+      return await operation();
+    } finally {
+      if (request) {
+        request.workSettled = true;
+        if (request.transportEnded) request.complete();
+      }
+    }
+  }
   public async drainRequests(): Promise<void> {
     while (this.acceptedRequests.size) await Promise.all([...this.acceptedRequests]);
     if (this.requestFailed) throw new Error("An accepted HTTP request ended without confirmation");
@@ -88,11 +120,18 @@ export default class App {
       let finish!: () => void;
       const accepted = new Promise<void>(resolve => { finish = resolve; });
       this.acceptedRequests.add(accepted);
-      res.once("finish", () => { this.acceptedRequests.delete(accepted); finish(); });
-      res.once("close", () => {
-        if (!res.writableFinished) this.requestFailed = true;
-        this.acceptedRequests.delete(accepted); finish();
-      });
+      const request: AcceptedRequest = {
+        transportEnded: false, readOnly: false, workSettled: true,
+        complete: () => { this.acceptedRequests.delete(accepted); finish(); },
+      };
+      this.requestWork.set(res, request);
+      const endTransport = () => {
+        request.transportEnded = true;
+        if (!res.writableFinished && !request.readOnly) this.requestFailed = true;
+        if (request.workSettled) request.complete();
+      };
+      res.once("finish", endTransport);
+      res.once("close", endTransport);
       next();
     });
     this.processName = processName;

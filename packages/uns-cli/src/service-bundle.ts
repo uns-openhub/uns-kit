@@ -186,6 +186,7 @@ export function generateAgentsMarkdown(bundle: ServiceBundle): string {
     "",
     "<!-- uns-kit:migrations:start -->",
     "## UNS Kit dependency upgrades",
+    "- When crossing `<3.0.39` to `>=3.0.39`, read-only API handlers may explicitly await runReadOnlyRequest(res, work) before their first async step. Drain waits for actual work after disconnect; undeclared/effectful unknown outcomes stay blocked. Do not infer safety from GET/POST. Follow MIGRATIONS.md and the HTTP example.",
     "- When crossing `<3.0.38` to `>=3.0.38`, correlated-v2 MQTT handover uses format3 on both peers. Review the initial stop-before-start SDK upgrade; never bypass mixed-format refusal. Missing or ambiguous input overlap keeps the source active. Reconcile an unknown result under the same operation, and return ownership through a fresh reverse hot handover. Follow `MIGRATIONS.md` and the SDK example.",
     "- When crossing `<3.0.34` to `>=3.0.34`, paired-to-direct retirement is optional: use the shared declared selectors, startup/readiness and retained policy5 contract; stop/drain both old owners before one launch, preserve the input journal, update the backup helper for manifest2 and reconcile unknown outcomes in the same operation.",
     "- When crossing `<3.0.33` to `>=3.0.33`, clean MQTT migration is an opt-in shared capability: declare mqttDrain protocol1 and acknowledge prepared handlers with enableMigrationDrain(); preserve retained queues and standalone cleanup. Explicit enabled:false requires an empty, unowned output queue.",

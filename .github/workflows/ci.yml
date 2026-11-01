@@ -43,7 +43,7 @@ jobs:
       - run: pnpm run ts:version:check
       - run: pnpm run ts:build
       - run: pnpm run ts:pack:check
-      - run: pnpm exec vitest run tests/api-package-boundary.test.ts
+      - run: pnpm exec vitest run tests/api-package-boundary.test.ts tests/api-ownership-drain.test.ts tests/api-read-only-drain.test.ts
       - run: pnpm exec vitest run tests/uns-cli-upgrade.test.ts tests/uns-cli-bundle-create.test.ts
       - run: pnpm exec vitest run tests/runtime/process-group-contract.test.ts tests/process-group-upgrade.test.ts tests/process-group-direct.test.ts tests/runtime/process-group-usage.test.ts
       - run: pnpm exec vitest run tests/runtime/configuration-group-contract.test.ts tests/runtime/configuration-group-inspection.test.ts tests/runtime/process-group-generation.test.ts tests/runtime/process-group-configured-upgrade.test.ts

@@ -9,6 +9,24 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.39 - Explicit read-only HTTP work during migration
+
+When crossing `<3.0.39` to `>=3.0.39`, existing handlers keep their conservative
+HTTP drain behavior. No MQTT format, ownership contract or Controller change is
+required. Applications that serve reads may opt in per handler using
+`await api.runReadOnlyRequest(res, async () => { /* complete the read */ })`.
+Declare the work before the first asynchronous step and await every admitted
+subtask inside the callback, including cancellation settlement. Use it only for
+work without external effects; neither GET nor POST establishes that property.
+
+A reader disconnect no longer poisons future drains for an opted-in handler,
+but drain still waits for actual handler completion, even after an early HTTP
+response. The helper does not cancel SQL, authorize access, retry a request or
+send a response. Keep application cancellation and error handling. An undeclared
+disconnect remains an unknown outcome and blocks handover. Do not wrap writes,
+publications or business mutations as reads to bypass that safeguard. See the
+[HTTP example](https://github.com/uns-openhub/uns-kit/blob/master/docs/mqtt-stateful-handover.md#http-readers-and-disconnects-3039).
+
 ## 3.0.38 - Bounded late-subscriber input boundary (format3)
 
 When crossing `<3.0.38` to `>=3.0.38`, non-opt-in applications keep their existing

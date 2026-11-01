@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { readFileSync } from "fs";
 import jwt from "jsonwebtoken";
 import * as path from "path";
@@ -129,6 +129,11 @@ export default class UnsApiProxy extends UnsProxy {
 
   public setOwnershipGate(gate: () => boolean): void { this.app.setOwnershipGate(gate); }
   public async drainRequests(): Promise<void> { await this.app.drainRequests(); }
+
+  /** Track an explicitly read-only handler through completion, including client disconnects. */
+  public async runReadOnlyRequest<T>(res: Response, operation: () => T | Promise<T>): Promise<T> {
+    return this.app.runReadOnlyRequest(res, operation);
+  }
 
   public getProcessName(): string {
     return this.processName;

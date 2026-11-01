@@ -141,6 +141,43 @@ publication failure latched in the application drain and block a clean migration
 receipt, including a repeated request after reconnect. Review the uncertain range
 before a separate recovery; never clear this latch merely to complete a move.
 
+## HTTP readers and disconnects (3.0.39)
+
+Applications explicitly distinguish read-only work from effects. A request's
+method or a caller's header is not evidence that it is safe to abandon. For an
+endpoint that only reads, use the API proxy helper before starting asynchronous
+work:
+
+```ts
+api.event.on('apiGetEvent', async ({ req, res }) => {
+  try {
+    await api.runReadOnlyRequest(res, async () => {
+      // Authenticate and enforce topic/tenant access as usual.
+      await authorize(req);
+      // The application owns cancellation and awaits all admitted work.
+      const rows = await readRows(req, res);
+      if (!res.destroyed) res.json({ rows });
+    });
+  } catch (error) {
+    if (!res.destroyed && !res.headersSent) res.status(503).json({ error: 'Read unavailable' });
+  }
+});
+```
+
+Use the wrapper exactly once on the original admitted response. All work must
+settle inside it; do not start detached operations. It remains available in
+standalone mode. During a hot transfer, new requests stay rejected while the
+source is passive. For an admitted read, disconnect or an early response does
+not finish its work: drain waits for the callback. A completed or failed read
+then permits drain without asserting that the client received the response.
+The same rule applies to a read-only POST batch/search endpoint after reviewing
+its behavior. Never apply it to a route that can write or publish.
+
+Unmarked requests retain conservative behavior. Disconnect before confirmed
+response completion leaves their outcome unknown and blocks handover. A late
+declaration cannot clear that latch. Reconcile business effects under the
+original operation instead of retrying or discarding the uncertainty.
+
 ## Sparse input and late subscribers (3.0.38)
 
 No application-name or topic-name exceptions are needed. The SDK first obtains a
