@@ -24,6 +24,8 @@ Pointers for AI/code-assist tools when working in this generated project.
 
 ## UNS Kit dependency upgrades
 
+- When crossing `<3.0.38` to `>=3.0.38`, correlated-v2 MQTT handover uses format3 on both peers. Review the initial stop-before-start SDK upgrade; never bypass mixed-format refusal. Missing or ambiguous input overlap keeps the source active. Reconcile an unknown result under the same operation, and return ownership through a fresh reverse hot handover. Follow `MIGRATIONS.md` and the SDK example.
+
 - When crossing `<3.0.32` to `>=3.0.32`, existing services remain unchanged. Enabling a Runtime MQTT outbox on an authorized process group requires the separate reviewed protocol3 transition and shared capability declaration. Preserve input/output journals, stop admission and drain accepted input before stopping the publisher on rollback, and block restoration on pending output or unknown outcomes. Never add application-specific Controller rules.
 
 - When crossing `<3.0.31` to `>=3.0.31`, ordinary services remain unchanged. Optional Runtime-managed MQTT outboxes require explicit `output.publishQueue.storage: runtime`, a trusted private per-Controller external mount and matching backup support. Preserve schema1 queues; restoring managed state requires a stopped source and an empty offline target. Read the version-bounded migration before enabling it.

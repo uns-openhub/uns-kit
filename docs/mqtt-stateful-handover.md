@@ -1,4 +1,4 @@
-# State-preserving MQTT handover (3.0.35)
+# State-preserving MQTT handover
 
 This opt-in SDK protocol transfers the in-memory counter baselines and publication
 sequence state owned by `UnsMqttProxy`. It is independent of application names,
@@ -41,9 +41,10 @@ reset the baseline. The source stays passive until an acknowledgement of that
 exact digest permits its clean exit. Missing, ambiguous, oversized or incompatible
 state blocks the transition; a successor with a reviewed ID never self-promotes.
 
-The overlap is based on the last three delivered input packets. Streams without
-an identifiable shared overlap cannot use this handover. It is not a claim of
-universal MQTT exactly-once delivery: duplicates/loss before SDK admission,
+The original format requires the last three delivered input packets. The
+3.0.38 format3 described below supports a shorter uniquely identifiable shared
+suffix. Streams without an identifiable shared overlap cannot use either form.
+This is not a claim of universal MQTT exactly-once delivery: duplicates/loss before SDK admission,
 broker session limits and crashes remain separate concerns. On an unknown result,
 reconcile the same operation; do not force-start another writer.
 
@@ -139,3 +140,60 @@ outage. Reconnection does not prove those packets were delivered. Keep an observ
 publication failure latched in the application drain and block a clean migration
 receipt, including a repeated request after reconnect. Review the uncertain range
 before a separate recovery; never clear this latch merely to complete a move.
+
+## Sparse input and late subscribers (3.0.38)
+
+No application-name or topic-name exceptions are needed. The SDK first obtains a
+fresh passive-input preview from each worker, after current MQTT subscription
+acknowledgements. An output-only proxy has an empty input boundary; it still needs
+a connected transport. Its absence of input subscriptions is not an input fault.
+
+Before releasing input, the source checks that its recent processed tail and the
+successor's buffer have a uniquely identifiable ordered common suffix. A successor
+that missed older source packets can therefore continue after one new common
+packet, when that packet is unambiguous. Missing or ambiguous overlap leaves the
+source active; the target sends a bounded series of fresh offers. It does not
+promote itself on expiry. Quiet sources may need a real new input packet before
+a live move can be proven. Do not inject fake business readings to bypass this.
+
+After freezing, the source transfers its actual tail and calculation state. Every
+successor input queue validates that frozen boundary against its whole buffer
+before any state is imported or any input is consumed. The preview is a hint, not
+an activation permission. A late packet can allow another read-only preparation
+on a repeated FIN. Once any state import or activation has begun, an error may
+have an unknown effect: the SDK blocks further application rather than replaying
+the import. A completed duplicate FIN only replays the same receipt.
+
+Fingerprints include topic and exact payload. The implementation does not dedupe
+equal measurement values or timestamps. Identical input packets remain separate
+queue entries; a repeated boundary that cannot be uniquely located blocks the
+move. Source history is bounded to 10 packets and previews to 100 fingerprints;
+it does not copy an unbounded queue into the control message.
+
+Format3 is included in the compatibility digest. Mixed format2/format3 stateful
+peers refuse before source freeze, even if their business contract is identical.
+Plan a reviewed initial stop-before-start SDK upgrade on one host, then test live
+moves between matching updated peers. Controller protocol2, standalone cleanup,
+legacy readers and persistent-output ownership are separate and unchanged.
+
+### Repeatable application check
+
+Use isolated input/output brokers and synthetic data, keeping the application's
+real parser, paths, time conversion and units:
+
+1. Start one active source and publish several acknowledged batches before the
+   successor exists. Record every expected output tuple and packet multiplicity.
+2. Prepare a fresh stopped target through the host's normal preview and request
+   one reviewed live move. Deliberately discard the HTTP response.
+3. Once the passive target subscribes, send one new uniquely identifiable packet
+   and then leave the stream quiet. Reconcile the original durable operation ID.
+4. Compare every output's topic, source time, value and unit against the input;
+   check original exit0, the bound SDK drain receipt and one active successor.
+5. Return ownership through another reviewed hot move into a fresh stopped
+   instance. Do not remove the old fence or restart its stale RAM baseline.
+6. Repeat with equal values at different times and legitimate identical packets.
+   Verify that replaying a completed operation does not change the target PID.
+
+Also test absent/ambiguous overlap and delayed input. A successful bounded test
+proves that case; it does not prove arbitrary broker ordering, replay of missing
+QoS0 messages, crash durability, archive commits or universal exactly-once MQTT.

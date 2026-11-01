@@ -273,6 +273,17 @@ and apply only the migrations whose version boundaries are crossed. The
 `3.0.0` migration documents the MQTT table-column object contract, while the
 `2.0.71` migration documents MQTT publish and shutdown ownership changes.
 
+## State-preserving MQTT handover
+
+Correlated-v2 MQTT handover in3.0.38 verifies a uniquely shared input boundary
+before releasing the source, including a late subscriber that missed older
+packets. Both peers need format3; mixed old/new formats refuse before freeze.
+Retain semantic contracts, accepted-work drain and restart fences. Missing or
+ambiguous overlap and unknown activation results stay blocked.
+See the [protocol, example and limits](https://github.com/uns-openhub/uns-kit/blob/master/docs/mqtt-stateful-handover.md)
+and the version-bounded3.0.38 entry in `MIGRATIONS.md`. This does not transfer
+persistent queues or promise replay of broker losses.
+
 ## Optional configuration-owned process groups
 
 Version3.0.29 adds optional shared contracts for immutable application-owned JSON

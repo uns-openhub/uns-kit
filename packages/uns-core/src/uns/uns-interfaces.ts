@@ -198,7 +198,7 @@ export interface UnsEvents {
   error: { code: number; message: string };
   
   // Emitters in UnsMqttProxy
-  mqttWorker: { command: string, instanceName: string; batchSize: number, referenceHash: string };
+  mqttWorker: { command: string, instanceName: string; batchSize: number, referenceHash: string; processedTail?: string[] };
 
   // Emitter in UnsCronProxy
   cronEvent: { event?: string; cronExpression?: string };

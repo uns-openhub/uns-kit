@@ -9,6 +9,27 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.38 - Bounded late-subscriber input boundary (format3)
+
+When crossing `<3.0.38` to `>=3.0.38`, non-opt-in applications keep their existing
+protocol. For opt-in correlated-v2 MQTT handover, both peers must use the new
+format3 implementation. Format is bound
+into the compatibility digest: a mixed old/new pair refuses while the source
+remains active. Review an initial stop-before-start upgrade, then use matching
+peers for live moves. Never relabel a business contract to bypass this check.
+
+No application-specific migration hooks are introduced. Keep existing
+`deferHandoverUntilReady`, semantic contracts and accepted-work/drain ownership.
+The SDK checks fresh broker subscription acknowledgements and uniquely shared
+ordered input before release, including sparse sources whose target missed old
+packets. Without proof the source stays active and the target remains passive.
+Only read-only preparation can repeat after delayed input; unknown import or
+activation effects remain blocked. Equal values are not deduplicated.
+
+This does not move persistent queues or guarantee replay of broker losses.
+Use a reviewed reverse hot move for return ownership and retain existing fences.
+See [protocol, example and limits](https://github.com/uns-openhub/uns-kit/blob/master/docs/mqtt-stateful-handover.md#sparse-input-and-late-subscribers-3038).
+
 ## 3.0.37 - Application lifecycle, HTTP ownership and bounded RAM state
 
 When crossing `<3.0.37` to `>=3.0.37`, existing non-opt-in consumers retain their

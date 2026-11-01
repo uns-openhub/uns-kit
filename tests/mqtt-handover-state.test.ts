@@ -69,6 +69,29 @@ describe('generic stateful MQTT handover', () => {
     await m.handleHandover(event(finish()));
     expect(proxy.importHandoverState).not.toHaveBeenCalled(); expect(proxy.activateHandoverResume).not.toHaveBeenCalled(); expect(publish).not.toHaveBeenCalled();
   });
+  it('rechecks a delayed input frontier without importing or consuming it twice', async () => {
+    const { m, proxy, publish } = target(); proxy.prepareHandoverResume.mockRejectedValueOnce(Error('delayed'));
+    await m.handleHandover(event(finish()));
+    expect(proxy.importHandoverState).not.toHaveBeenCalled(); expect(publish).not.toHaveBeenCalled();
+    await m.handleHandover(event(finish())); await m.handleHandover(event(finish()));
+    expect(proxy.prepareHandoverResume).toHaveBeenCalledTimes(2);
+    expect(proxy.importHandoverState).toHaveBeenCalledOnce(); expect(proxy.activateHandoverResume).toHaveBeenCalledOnce(); expect(publish).toHaveBeenCalledTimes(2);
+  });
+  it('does not retry an activation with an unknown effect', async () => {
+    const { m, proxy, publish } = target(); proxy.activateHandoverResume.mockRejectedValue(Error('unconfirmed'));
+    await m.handleHandover(event(finish())); await m.handleHandover(event(finish()));
+    expect(proxy.importHandoverState).toHaveBeenCalledOnce(); expect(proxy.activateHandoverResume).toHaveBeenCalledOnce(); expect(publish).not.toHaveBeenCalled();
+  });
+  it('keeps source admission open before missing input overlap, then accepts the same attempt', async () => {
+    vi.useFakeTimers();
+    const prepare=vi.fn(async()=>snapshot().cursor), ready=vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true), release=vi.fn();
+    const proxy={instanceName:'counter',getHandoverCompatibility:()=>({instanceName:'counter',compatibility:snapshot().compatibility}),canPrepareHandoverInput:ready,
+      setSubscriberPassiveAndDrainQueue:prepare,flush:vi.fn(),exportHandoverState:()=>snapshot()};
+    const manager=new HandoverManager('another-feed','old',{publish:vi.fn()} as any,[proxy] as any,false,true,false,undefined,{drain:async()=>{},onRelease:release},true) as any;manager.active=true;
+    const request=event({type:'handover_request',protocol:2,handoverId:'move-1',offer:[{instanceName:'counter',compatibility:snapshot().compatibility,inputPreview:[]}]},'new');
+    await manager.handleHandover(request);expect(manager.active).toBe(true);expect(release).not.toHaveBeenCalled();expect(prepare).not.toHaveBeenCalled();
+    await manager.handleHandover(request);expect(release).toHaveBeenCalledOnce();expect(prepare).toHaveBeenCalledOnce();
+  });
   it('rejects duplicate keys, invalid times and oversized snapshots', () => {
     const a = state(); a.proxies[0].values.push(a.proxies[0].values[0]); expect(() => parseMqttHandoverState(a)).toThrow();
     const b = state(); b.proxies[0].values[0].timestamp = 'not-a-date'; expect(() => parseMqttHandoverState(b)).toThrow();
@@ -77,7 +100,7 @@ describe('generic stateful MQTT handover', () => {
   it('finishes accepted application work and broker flush before publishing calculation state', async () => {
     vi.useFakeTimers(); const order: string[] = []; let complete!: () => void;
     const pending = new Promise<void>(r => { complete = r; });
-    const proxy = { instanceName: 'counter', getHandoverCompatibility: () => ({instanceName:'counter', compatibility:snapshot().compatibility}), setSubscriberPassiveAndDrainQueue: async () => { order.push('freeze'); return snapshot().cursor; }, flush: async () => { order.push('flush'); }, exportHandoverState: () => { order.push('snapshot'); return snapshot(); }, stop: vi.fn() };
+    const proxy = { instanceName: 'counter', canPrepareHandoverInput: async () => true, getHandoverCompatibility: () => ({instanceName:'counter', compatibility:snapshot().compatibility}), setSubscriberPassiveAndDrainQueue: async () => { order.push('freeze'); return snapshot().cursor; }, flush: async () => { order.push('flush'); }, exportHandoverState: () => { order.push('snapshot'); return snapshot(); }, stop: vi.fn() };
     const publish = vi.fn(async () => { order.push('fin'); });
     const m = new HandoverManager('unrelated-sensor', 'old', { publish } as any, [proxy] as any, false, true, false, undefined, { drain: async () => { await pending; order.push('app'); } }, true) as any;
     m.active = true;

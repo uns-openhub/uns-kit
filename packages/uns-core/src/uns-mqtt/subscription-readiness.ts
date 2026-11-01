@@ -37,7 +37,12 @@ export class SubscriptionReadiness {
   }
 
   ready(): boolean {
-    return this.connected && this.filters.size > 0 && this.pending.size === 0
+    return this.filters.size > 0 && this.handoverReady();
+  }
+
+  /** A connected output-only proxy has an empty input boundary, not a pending SUBACK. */
+  handoverReady(): boolean {
+    return this.connected && this.pending.size === 0
       && [...this.filters.values()].every(filter => filter.acknowledged);
   }
 }

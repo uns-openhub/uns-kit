@@ -36,6 +36,7 @@ export default class MqttProxy {
   private subscribedMessageBytes = 0;
   private mqttWorker: MqttWorker;
   public isConnected = false;
+  public isHandoverInputReady(): boolean { return this.subscriptionReadiness.handoverReady(); }
   private subscriptionReadiness = new SubscriptionReadiness();
   private lastSubscriptionReady: boolean | null = null;
   private rejectUnauthorized: boolean;

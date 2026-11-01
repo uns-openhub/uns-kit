@@ -163,6 +163,14 @@ export class MqttWorker {
         this.mqttProxy.subscribeAsync(msg.topics);
       } else if (msg && msg.command === "unsubscribeAsync" && msg.topics) {
         this.mqttProxy.unsubscribeAsync(msg.topics);
+      } else if (msg?.command === "previewSubscriberInput" || msg?.command === "reviewSubscriberInput") {
+        try {
+          if (!this.mqttProxy.isHandoverInputReady()) throw Error("MQTT input subscriptions are not ready");
+          const result = msg.command === "previewSubscriberInput" ? this.subscriber.getInputPreview() : this.subscriber.canResumeInput(msg.preview);
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "success", result });
+        } catch {
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "error", error: "MQTT input boundary review unavailable" });
+        }
       } else if (msg?.command === "prepareSubscriberResume" || msg?.command === "activatePreparedSubscriber") {
         try {
           if (msg.command === "prepareSubscriberResume") this.subscriber.prepareResume(msg.cursor);

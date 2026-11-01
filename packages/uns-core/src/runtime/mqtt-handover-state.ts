@@ -3,10 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 import { cloneApplicationHandoverState } from './application-handover-state.js';
+import { inputCursorSchema, inputPreviewSchema } from './input-queue-boundary.js';
 
 // Same contract for every SDK MQTT consumer. No application/profile selectors.
-// Bound into peer compatibility so older required-unit readers reject before freeze.
-export const MQTT_HANDOVER_STATE_FORMAT = 2;
+// Bound into peer compatibility so older cursor/state readers reject before freeze.
+export const MQTT_HANDOVER_STATE_FORMAT = 3;
 export const MQTT_HANDOVER_STATE_MAX_BYTES = 1024 * 1024;
 const text = z.string().min(1).max(65535).refine(v => !v.includes('\0'));
 const scalar = z.union([z.number().finite(), z.string().max(65535)]);
@@ -14,13 +15,14 @@ const value = z.union([scalar, z.array(scalar).max(4096)]);
 export const mqttHandoverOfferSchema = z.array(z.strictObject({
   instanceName: z.string().min(1).max(256),
   compatibility: z.string().regex(/^[a-f0-9]{64}$/),
+  inputPreview: inputPreviewSchema.optional(),
 })).max(64).refine(offer => new Set(offer.map(p => p.instanceName)).size === offer.length, 'Duplicate MQTT proxy');
 export const mqttProxyHandoverStateSchema = z.strictObject({
   instanceName: z.string().min(1).max(256),
   compatibility: z.string().regex(/^[a-f0-9]{64}$/),
   values: z.array(z.strictObject({ topic: text, value, uom: z.string().max(256).optional(), timestamp: z.string().datetime() })).max(10000),
   sequences: z.array(z.tuple([text, z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)])).max(10000),
-  cursor: z.strictObject({ batchSize: z.number().int().min(0).max(100), referenceHash: z.string().regex(/^[a-f0-9]{64}$/) }),
+  cursor: inputCursorSchema,
 }).superRefine((state, ctx) => {
   for (const keys of [state.values.map(v => v.topic), state.sequences.map(v => v[0])])
     if (new Set(keys).size !== keys.length) ctx.addIssue({ code: 'custom', message: 'Duplicate MQTT state key' });

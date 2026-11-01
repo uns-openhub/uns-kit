@@ -26,6 +26,8 @@ describe("uns-kit upgrade", () => {
     const firstAgents = await readFile(path.join(targetDir, "AGENTS.md"), "utf8");
     expect(firstAgents).toContain("Keep this project-specific rule.");
     expect(firstAgents).toContain("node_modules/@uns-kit/core/MIGRATIONS.md");
+    expect(firstAgents).toContain("`<3.0.38` to `>=3.0.38`");
+    expect(firstAgents).toContain("never bypass mixed-format refusal");
     expect(firstAgents).toContain("When crossing `<2.0.71` to `>=2.0.71`");
     expect(firstAgents).toContain("When crossing `<3.0.0` to `>=3.0.0`");
     expect(firstAgents).toContain("When crossing `<3.0.7` to `>=3.0.7`");

@@ -1,4 +1,5 @@
 import { MQTT_HANDOVER_STATE_FORMAT, mqttProxyHandoverStateSchema, type MqttProxyHandoverState } from "../runtime/mqtt-handover-state.js";
+import { inputPreviewSchema, type InputQueueCursor } from "../runtime/input-queue-boundary.js";
 import { assertDisabledPublishQueueEmpty } from "./disabled-publish-queue.js";
 import { randomUUID, createHash } from "node:crypto";
 import { mqttPublishQueueIdentity, mqttPublishQueueSchema, type MqttPublishQueueStatus } from "./publish-queue-contract.js";
@@ -114,7 +115,7 @@ export default class UnsMqttProxy extends UnsProxy {
   private publishesSealed = false;
   private admissionBytes = new Map<string, number>();
   private pendingAdmissionBytes = 0;
-  private queueRequests = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private queueRequests = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; readResult?: (value: unknown) => void }>();
 
 
   constructor(
@@ -264,7 +265,10 @@ export default class UnsMqttProxy extends UnsProxy {
         const pending = this.queueRequests.get(msg.id);
         if (pending) {
           clearTimeout(pending.timer); this.queueRequests.delete(msg.id);
-          if (msg.status === "success") pending.resolve(); else pending.reject(new Error(msg.error));
+          if (msg.status === "success") {
+            try { if (pending.readResult) pending.readResult(msg.result); else pending.resolve(); }
+            catch { pending.reject(Error("Invalid MQTT input boundary reply")); }
+          } else pending.reject(new Error(msg.error));
         }
       } else if (msg?.command === "publishQueueControlError") {
         this.event.emit("error", { code: 0, message: msg.error });
@@ -292,7 +296,7 @@ export default class UnsMqttProxy extends UnsProxy {
       } else if (msg && msg.command === "input") {
         this.event.emit("input", { topic: msg.topic, message: msg.message.toString(), packet: msg.packet });
       } else if (msg && (msg.command === "handover_subscriber" || msg.command === "handover_publisher")) {
-        this.event.emit("mqttWorker", { command: msg.command, batchSize: msg.batchSize, referenceHash: msg.referenceHash, instanceName: this.instanceName });
+        this.event.emit("mqttWorker", { command: msg.command, batchSize: msg.batchSize, referenceHash: msg.referenceHash, ...(msg.processedTail ? {processedTail: msg.processedTail} : {}), instanceName: this.instanceName });
       } else if (msg && msg.command === "mqttProxyStatus") {
         if (msg.event === "mqtt-connected") this.connectionReady = msg.value === 1;
         if (msg.event === "mqtt-subscriptions-ready") this.subscriptionsReady = msg.value === 1;
@@ -406,7 +410,7 @@ export default class UnsMqttProxy extends UnsProxy {
     return { instanceName: this.instanceName, compatibility: this.stateCompatibility };
   }
 
-  public exportHandoverState(cursor: { batchSize: number; referenceHash: string }): MqttProxyHandoverState {
+  public exportHandoverState(cursor: InputQueueCursor): MqttProxyHandoverState {
     return mqttProxyHandoverStateSchema.parse({
       instanceName: this.instanceName, compatibility: this.stateCompatibility,
       values: [...this.lastValues].map(([topic, entry]) => ({ topic, ...entry, timestamp: entry.timestamp.toISOString() })),
@@ -431,13 +435,36 @@ export default class UnsMqttProxy extends UnsProxy {
     this.currentSequenceId = new Map(state.sequences.map(([topic, sequence]) => [topic, sequence]));
   }
 
-  public prepareHandoverResume(cursor: { batchSize: number; referenceHash: string }): Promise<void> {
+  public async getHandoverOffer() {
+    return { ...this.getHandoverCompatibility(), inputPreview: inputPreviewSchema.parse(await this.subscriberQuery("previewSubscriberInput")) };
+  }
+
+  public async canPrepareHandoverInput(preview: unknown): Promise<boolean> {
+    if (!inputPreviewSchema.safeParse(preview).success) return false;
+    const result = await this.subscriberQuery("reviewSubscriberInput", preview);
+    if (typeof result !== "boolean") throw Error("Invalid MQTT input review reply");
+    return result;
+  }
+
+  private subscriberQuery(command: string, preview?: unknown): Promise<unknown> {
+    if (this.workerFailure) return Promise.reject(this.workerFailure);
+    if (this.queueRequests.size >= 64) return Promise.reject(Error("Too many pending MQTT controls"));
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.queueRequests.delete(id); reject(Error("MQTT input boundary review timed out")); }, 5000);
+      this.queueRequests.set(id, { resolve: () => {}, reject, timer, readResult: resolve });
+      try { this.worker.postMessage({ command, id, preview }); }
+      catch (error) { clearTimeout(timer); this.queueRequests.delete(id); reject(error); }
+    });
+  }
+
+  public prepareHandoverResume(cursor: InputQueueCursor): Promise<void> {
     return this.subscriberControl("prepareSubscriberResume", cursor);
   }
 
   public activateHandoverResume(): Promise<void> { return this.subscriberControl("activatePreparedSubscriber"); }
 
-  private subscriberControl(command: string, cursor?: { batchSize: number; referenceHash: string }): Promise<void> {
+  private subscriberControl(command: string, cursor?: InputQueueCursor): Promise<void> {
     if (this.workerFailure) return Promise.reject(this.workerFailure);
     if (this.queueRequests.size >= 64) return Promise.reject(Error("Too many pending MQTT controls"));
     const id = randomUUID();

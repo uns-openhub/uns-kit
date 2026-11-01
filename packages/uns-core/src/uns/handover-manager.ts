@@ -43,7 +43,10 @@ export class HandoverManager {
   private stateDigest: string | undefined;
   private acceptedStateDigest: string | undefined;
   private targetPreparation: Promise<void> | undefined;
+  private targetStateApplied = false;
   private finRetry: NodeJS.Timeout | undefined;
+  private requestRetry: NodeJS.Timeout | undefined;
+  private sourceReviewInFlight = false;
   public handoverRequestEnabled: boolean = false;
   public handoverEnabled: boolean = true;
   public forceStartEnabled: boolean = false;
@@ -211,16 +214,27 @@ export class HandoverManager {
             },
           });
           logger.info(`${this.processName} - Requesting handover in 10 seconds.`);
-          setTimeout(async () => {
-            logger.info(`${this.processName} - Requesting handover ${eventHandoverTopic}.`);
+          setTimeout(() => {
             this.handoverInProgress = true;
-            await this.mqttProxy.publish(eventHandoverTopic, this.handoverPayload("handover_request", undefined, this.statefulHandover ? { offer: this.unsMqttProxies.map(proxy => proxy.getHandoverCompatibility()), applicationContract: this.applicationState?.contract } : {}), {
-              retain: false,
-              properties: {
-                responseTopic: this.topicBuilder.getHandoverTopic(),
-                userProperties: this.getUserProperties(),
-              },
-            });
+            let retries = 0;
+            const request = async () => {
+              if (this.targetPreparation || this.acceptedStateDigest) { clearInterval(this.requestRetry); return; }
+              try {
+                const offer = this.statefulHandover ? await Promise.all(this.unsMqttProxies.map(proxy => proxy.getHandoverOffer())) : undefined;
+                await this.mqttProxy.publish(eventHandoverTopic, this.handoverPayload("handover_request", undefined,
+                  this.statefulHandover ? { offer, applicationContract: this.applicationState?.contract } : {}), {
+                  retain: false, properties: { responseTopic: this.topicBuilder.getHandoverTopic(), userProperties: this.getUserProperties() },
+                });
+              } catch { logger.warn("MQTT input boundary preparation is not ready; successor remains passive"); }
+            };
+            void request();
+            if (this.statefulHandover) {
+              this.requestRetry = setInterval(() => {
+                if (++retries > 15 || this.targetPreparation || this.acceptedStateDigest) { clearInterval(this.requestRetry); return; }
+                void request();
+              }, 1000);
+              this.requestRetry.unref();
+            }
           }, 10000);
         } else {
           if (this.forceStartEnabled) {
@@ -288,7 +302,7 @@ export class HandoverManager {
         data: cloneApplicationHandoverState(this.applicationState.exportState()) } : undefined;
       if (application) this.applicationState!.validateState(application.data);
       this.preparedState = parseMqttHandoverState({ protocol: 1, ...(application ? { application } : {}), proxies: this.unsMqttProxies.map((proxy, i) =>
-        proxy.exportHandoverState({ batchSize: mqttWorkerData[i].batchSize, referenceHash: mqttWorkerData[i].referenceHash })) });
+        proxy.exportHandoverState({ batchSize: mqttWorkerData[i].batchSize, referenceHash: mqttWorkerData[i].referenceHash, ...(mqttWorkerData[i].processedTail ? {processedTail: mqttWorkerData[i].processedTail} : {}) })) });
       this.stateDigest = mqttHandoverStateDigest(this.preparedState);
       await this.sendPreparedState(event, handoverId);
       let retries = 0;
@@ -362,6 +376,9 @@ export class HandoverManager {
     for (const snapshot of state.proxies) byName.get(snapshot.instanceName)!.validateHandoverState(snapshot);
     // Validate every cursor before importing any state or activating any subscriber.
     for (const snapshot of state.proxies) await byName.get(snapshot.instanceName)!.prepareHandoverResume(snapshot.cursor);
+    // After this point an import/activation error has an unknown effect. Only
+    // read-only boundary preparation may be retried on a repeated FIN.
+    this.targetStateApplied = true;
     for (const snapshot of state.proxies) byName.get(snapshot.instanceName)!.importHandoverState(snapshot);
     if (state.application) await this.applicationState!.importState(state.application.data);
     for (const proxy of this.unsMqttProxies) proxy.setPublisherActive();
@@ -450,6 +467,17 @@ export class HandoverManager {
           const own = this.unsMqttProxies.map(proxy => proxy.getHandoverCompatibility());
           if (offer.length !== own.length || own.some(p => !offer.some(o => o.instanceName === p.instanceName && o.compatibility === p.compatibility)))
             throw Error("MQTT source/destination or semantic contract differs; source remains active");
+          if (this.sourceReviewInFlight) return;
+          this.sourceReviewInFlight = true;
+          try {
+            // Hints only: actual frozen cursors are revalidated by every target
+            // worker before activation. A quiet/unready source keeps admission.
+            for (const proxy of this.unsMqttProxies) {
+              const preview = offer.find(candidate => candidate.instanceName === proxy.instanceName)!.inputPreview;
+              if (!await proxy.canPrepareHandoverInput(preview)) return;
+            }
+          } finally { this.sourceReviewInFlight = false; }
+          if (this.sourcePeerId || !this.active) return;
         }
         this.sourcePeerId = peerId;
         this.acceptedHandoverId = this.getHandoverId(response, event);
@@ -488,7 +516,14 @@ export class HandoverManager {
           const id = this.getHandoverId(response, event);
           if (this.sourcePeerId || !this.requestingHandover || id !== this.handoverId || this.getSourceProcessId(event) !== this.expectedSourceId) return;
           if (this.acceptedStateDigest && response.stateDigest !== this.acceptedStateDigest) return;
-          this.targetPreparation ??= this.acceptPreparedState(response);
+          clearInterval(this.requestRetry);
+          if (!this.targetPreparation) {
+            const preparation = this.acceptPreparedState(response);
+            this.targetPreparation = preparation;
+            void preparation.catch(() => {
+              if (!this.targetStateApplied && this.targetPreparation === preparation) this.targetPreparation = undefined;
+            });
+          }
           await this.targetPreparation;
           // Duplicate fin only replays the receipt; it never reapplies a baseline.
           if (response.stateDigest !== this.acceptedStateDigest) return;

@@ -53,6 +53,8 @@ describe("uns-kit create --bundle", () => {
     expect(agents).toContain("bootstrapped from `service.bundle.json`");
     expect(agents).toContain("Read `service.bundle.json` first");
     expect(agents).toContain("node_modules/@uns-kit/core/MIGRATIONS.md");
+    expect(agents).toContain("`<3.0.38` to `>=3.0.38`");
+    expect(agents).toContain("never bypass mixed-format refusal");
     expect(agents).toContain("When crossing `<2.0.71` to `>=2.0.71`");
     expect(agents).toContain("When crossing `<3.0.7` to `>=3.0.7`");
     expect(agents).toContain("When crossing `<3.0.29` to `>=3.0.29`");

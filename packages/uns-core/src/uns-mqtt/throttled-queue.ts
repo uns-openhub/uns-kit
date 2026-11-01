@@ -5,6 +5,7 @@ import { join } from "path";
 
 import { basePath } from "../base-path.js";
 import logger from "../logger.js";
+import { inputCursorSchema, inputFingerprint, inputPreviewSchema, uniqueInputBoundary, type InputQueueCursor } from "../runtime/input-queue-boundary.js";
 
 /**
  * Abstract base class that encapsulates common functionality for managing
@@ -485,7 +486,7 @@ export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
   /**
    * Switch the subscriber to a passive state and return a snapshot.
    */
-  public async becomePassive(n: number, strict = false): Promise<{ referenceHash: string; batchSize: number; }> {
+  public async becomePassive(n: number, strict = false): Promise<InputQueueCursor> {
     this.active = false;
     logger.info(`${this.instanceName} - Subscriber is passive.`);
     while (this.inFlight > 0) await new Promise(resolve => setTimeout(resolve, 1));
@@ -495,7 +496,7 @@ export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
     if (batchSize > 0) {
       logger.info(`${this.instanceName} - Subscriber batch reference hash: ${referenceHash}, size: ${batchSize}`);
     }
-    return { referenceHash, batchSize };
+    return { referenceHash, batchSize, ...(strict ? { processedTail: this.lastProcessedItems.map(inputFingerprint) } : {}) };
   }
 
   /**
@@ -503,9 +504,27 @@ export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
    */
   private preparedResume: number | undefined;
 
-  /** Validate a unique overlap without consuming input or activating this owner. */
-  public prepareResume(snapshot: { referenceHash: string; batchSize: number }): void {
+  public getInputPreview(): string[] {
     if (this.active) throw Error("MQTT successor is not passive");
+    return this.queue.slice(-100).map(inputFingerprint);
+  }
+
+  public canResumeInput(preview: unknown): boolean {
+    const parsed = inputPreviewSchema.safeParse(preview);
+    if (!this.active || !parsed.success) return false;
+    try { uniqueInputBoundary(this.lastProcessedItems.map(inputFingerprint), parsed.data); return true; }
+    catch { return false; }
+  }
+
+  /** Validate a unique overlap without consuming input or activating this owner. */
+  public prepareResume(snapshot: InputQueueCursor): void {
+    if (this.active) throw Error("MQTT successor is not passive");
+    this.preparedResume = undefined;
+    snapshot = inputCursorSchema.parse(snapshot);
+    if (snapshot.processedTail) {
+      this.preparedResume = uniqueInputBoundary(snapshot.processedTail, this.queue.map(inputFingerprint));
+      return;
+    }
     if (snapshot.batchSize === 0) { this.preparedResume = 0; return; }
     const matches: number[] = [];
     for (let i = 0; i <= this.queue.length - snapshot.batchSize; i++) {
