@@ -55,6 +55,7 @@ export interface HandoverManagerEvents {
 }
 
 export interface IMqttWorkerData {
+  managedInput?: boolean;
   publishQueue?: MqttPublishQueueOptions;
   publishQueueIdentity?: string;
   publishThrottlingDelay?: number; // Delay in milliseconds; default is 1ms

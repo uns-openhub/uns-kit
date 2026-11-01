@@ -6,6 +6,13 @@ import type { MqttPublishQueueStatus } from "../uns-mqtt/publish-queue-contract.
 /** Generic process-local handshake. The host supplies identity and durable receipts. */
 export const MQTT_DRAIN_HANDLER = Symbol.for("uns-kit.mqtt-drain.v1");
 export const MQTT_DRAIN_READY_EVENT = "uns-kit:mqtt-drain-ready";
+/** Launch-bound ordinary stop, sent by the authenticated host; never a forced stop. */
+export const MQTT_COOPERATIVE_STOP_TOPIC = "uns-kit:mqtt-stop:v1";
+export const mqttCooperativeStopRequestSchema = z.strictObject({
+  type: z.literal(MQTT_COOPERATIVE_STOP_TOPIC),
+  protocol: z.literal(1),
+  launchId: z.string().min(1).max(512),
+});
 export const mqttDrainReceiptSchema = z.strictObject({
   protocol: z.literal(1),
   state: z.literal("drained"),

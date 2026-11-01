@@ -2,6 +2,7 @@ import { MqttPublishQueue } from "./publish-queue.js";
 import { IClientPublishOptions } from "mqtt";
 import { join } from "path";
 import { parentPort } from "worker_threads";
+import { randomUUID } from "node:crypto";
 
 import { basePath } from "../base-path.js";
 import logger from "../logger.js";
@@ -14,6 +15,7 @@ export class MqttWorker {
   protected publisher: ThrottledPublisher | MqttPublishQueue;
   protected subscriber: ThrottledSubscriber;
   private defaultPublishOptions?: IClientPublishOptions;
+  private pendingInput?: { id: string; resolve: () => void; reject: (error: Error) => void };
 
   constructor(workerData: IMqttWorkerData) {
     const publishThrottlingDelay = workerData.publishThrottlingDelay ?? 1;
@@ -83,6 +85,14 @@ export class MqttWorker {
 
     // Define the message handler for incoming messages.
     const messageHandler = async (topic: string, message: string): Promise<void> => {
+      if (workerData.managedInput) {
+        await new Promise<void>((resolve, reject) => {
+          const id = randomUUID();
+          this.pendingInput = { id, resolve, reject };
+          parentPort?.postMessage({ command: "input", id, topic, message });
+        });
+        return;
+      }
       parentPort?.postMessage({
         command: "input",
         topic: topic,
@@ -98,6 +108,7 @@ export class MqttWorker {
       join(basePath, "/workerQueue/", "throttled-subscriber-queue.json"),
       instanceName,
       subscriberActive,
+      workerData.managedInput === true,
     );
 
     // Set up the message listener for commands from the main thread.
@@ -109,7 +120,12 @@ export class MqttWorker {
    */
   private initializeMessageListener(): void {
     parentPort?.on("message", async (msg) => {
-      if (msg && msg.command === "enqueue" && msg.id && msg.topic && msg.message !== undefined) {
+      if (msg?.command === "inputComplete" && this.pendingInput?.id === msg.id) {
+        const pending = this.pendingInput;
+        this.pendingInput = undefined;
+        if (msg.status === "success") pending.resolve();
+        else pending.reject(Error("Managed MQTT input failed; original input retained for review"));
+      } else if (msg && msg.command === "enqueue" && msg.id && msg.topic && msg.message !== undefined) {
         try {
           const publishPromise = this.publisher.enqueueOrThrow(msg.topic, msg.message, msg.id, msg.options ?? this.defaultPublishOptions);
           parentPort?.postMessage({
@@ -163,6 +179,14 @@ export class MqttWorker {
         this.mqttProxy.subscribeAsync(msg.topics);
       } else if (msg && msg.command === "unsubscribeAsync" && msg.topics) {
         this.mqttProxy.unsubscribeAsync(msg.topics);
+      } else if (msg?.command === "drainSubscriberInput") {
+        try {
+          await this.mqttProxy.pauseSubscriptions();
+          await this.subscriber.drainOwnedInput();
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "success" });
+        } catch {
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "error", error: "MQTT input drain unconfirmed; pending input retained" });
+        }
       } else if (msg?.command === "previewSubscriberInput" || msg?.command === "reviewSubscriberInput") {
         try {
           if (!this.mqttProxy.isHandoverInputReady()) throw Error("MQTT input subscriptions are not ready");
@@ -189,7 +213,8 @@ export class MqttWorker {
           ...snapshot
         });          
       } else if (msg && msg.command === "setSubscriberActive") {
-        this.subscriber.becomeActive({batchSize: msg?.batchSize, referenceHash: msg?.referenceHash});
+        try { this.subscriber.becomeActive({batchSize: msg?.batchSize, referenceHash: msg?.referenceHash}); }
+        catch { parentPort?.postMessage({ command: "publishQueueControlError", error: "MQTT input activation blocked; retained input requires review" }); }
       } else if (msg && msg.command === "setSubscriberPassive") {
         const snapshot = await this.subscriber.becomePassive(3, msg.strict === true);
         parentPort?.postMessage({

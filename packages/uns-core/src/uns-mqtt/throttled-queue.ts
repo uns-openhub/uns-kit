@@ -396,6 +396,7 @@ interface SubscriberQueueItem {
  */
 export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
   private messageHandler: (topic: string, message: string) => Promise<void>;
+  private inputFailed = false;
 
   /**
    * @param delay Delay between processing messages in milliseconds.
@@ -411,6 +412,7 @@ export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
     persistenceFilePath: string = join(basePath, "/subscriberQueue/", "throttled-subscriber-queue.json"),
     instanceName: string,
     active: boolean,
+    private readonly retainFailedInput = false,
   ) {
     super(delay, persistToDisk, instanceName);
     this.persistenceFilePath = persistenceFilePath;
@@ -445,7 +447,16 @@ export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
    * Process a single subscribe message.
    */
   protected async processItem(item: SubscriberQueueItem): Promise<void> {
-    await this.messageHandler(item.topic, item.message);
+    try {
+      await this.messageHandler(item.topic, item.message);
+    } catch (error) {
+      if (this.retainFailedInput) {
+        this.active = false;
+        this.inputFailed = true;
+        this.queue.unshift(item);
+      }
+      throw error;
+    }
   }
 
   /**
@@ -499,25 +510,37 @@ export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
     return { referenceHash, batchSize, ...(strict ? { processedTail: this.lastProcessedItems.map(inputFingerprint) } : {}) };
   }
 
+  /** Drain owned input only; a passive shadow must never be activated by Stop. */
+  public async drainOwnedInput(): Promise<void> {
+    while (this.active && (this.queue.length || this.inFlight)) {
+      if (this.inputFailed) throw Error("Managed MQTT input failed; retained input requires review");
+      await new Promise(resolve => setTimeout(resolve, 1));
+    }
+    if (this.inputFailed) throw Error("Managed MQTT input failed; retained input requires review");
+    await this.becomePassive(3, true);
+  }
+
   /**
    * Switch the subscriber to an active state and resume processing.
    */
   private preparedResume: number | undefined;
 
   public getInputPreview(): string[] {
+    if (this.inputFailed) throw Error("Managed MQTT input outcome requires review");
     if (this.active) throw Error("MQTT successor is not passive");
     return this.queue.slice(-100).map(inputFingerprint);
   }
 
   public canResumeInput(preview: unknown): boolean {
     const parsed = inputPreviewSchema.safeParse(preview);
-    if (!this.active || !parsed.success) return false;
+    if (this.inputFailed || !this.active || !parsed.success) return false;
     try { uniqueInputBoundary(this.lastProcessedItems.map(inputFingerprint), parsed.data); return true; }
     catch { return false; }
   }
 
   /** Validate a unique overlap without consuming input or activating this owner. */
   public prepareResume(snapshot: InputQueueCursor): void {
+    if (this.inputFailed) throw Error("Managed MQTT input outcome requires review");
     if (this.active) throw Error("MQTT successor is not passive");
     this.preparedResume = undefined;
     snapshot = inputCursorSchema.parse(snapshot);
@@ -544,6 +567,7 @@ export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
   }
 
   public becomeActive(snapshot: { referenceHash: string; batchSize: number }): void {
+    if (this.inputFailed) throw Error("Managed MQTT input cannot be retried after an unknown application outcome");
     // If snapshot is empty (batchSize is zero), start processing from the beginning.
     if (snapshot.batchSize === 0 || snapshot.batchSize === undefined || snapshot.referenceHash === undefined) {
       this.active = true;

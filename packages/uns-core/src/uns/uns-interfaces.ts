@@ -124,6 +124,10 @@ export interface IUnsParameters {
   publishThrottlingDelay?: number; // Delay in milliseconds; default is 1ms
   publishConcurrency?: number; // Maximum concurrent outgoing publishes; default is 1
   maxPendingPublishes?: number; // Maximum pending publishes across the API boundary and worker; default is unlimited
+  /** Opt-in bounded waiting for RAM output admission instead of rejecting a full queue. */
+  publishBackpressure?: { maxWaiting?: number };
+  /** Keep one input owned by the worker until setInputHandler's async work finishes. */
+  managedInput?: boolean;
   subscribeThrottlingDelay?: number; // Delay in milliseconds; default is 1ms
   rejectUnauthorized?: boolean;
   clientId?: string;

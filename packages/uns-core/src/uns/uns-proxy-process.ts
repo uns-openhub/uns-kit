@@ -1,5 +1,5 @@
 import { validateApplicationHandoverContract, type ApplicationHandoverState } from "../runtime/application-handover-state.js";
-import { MQTT_DRAIN_HANDLER, MQTT_DRAIN_READY_EVENT, drainMqttForMigration, type MqttDrainReceipt } from "../runtime/mqtt-drain.js";
+import { MQTT_DRAIN_HANDLER, MQTT_DRAIN_READY_EVENT, mqttCooperativeStopRequestSchema, drainMqttForMigration, type MqttDrainReceipt } from "../runtime/mqtt-drain.js";
 import { randomBytes } from "crypto";
 
 import logger from "../logger.js";
@@ -47,6 +47,8 @@ class UnsProxyProcess {
   private statefulHandover: boolean = false;
   private applicationHandoverState?: ApplicationHandoverState;
   private handoverReady = true;
+  private cooperativeStopHandler?: (message: unknown) => void;
+  private signalStopHandler?: () => void;
   private pendingHandover?: { instanceMode: string; handover: boolean };
   private readyToActivate: Promise<void> = Promise.resolve();
   private markReady?: () => void;
@@ -341,18 +343,35 @@ class UnsProxyProcess {
     if (registry[MQTT_DRAIN_HANDLER]) throw Error("One migration drain owner is allowed per process");
     this.migrationDrainHandler = () => this.drainForMigration();
     registry[MQTT_DRAIN_HANDLER] = this.migrationDrainHandler;
-    (process as unknown as { emit(event: string, value: unknown): boolean }).emit(MQTT_DRAIN_READY_EVENT, { protocol: 1, ...(this.statefulHandover ? { handoverProtocol: 2 } : {}) });
+    this.cooperativeStopHandler = message => {
+      const envelope = message as { type?: string; data?: unknown } | null;
+      const request = mqttCooperativeStopRequestSchema.safeParse(envelope?.type === "process:msg" ? envelope.data : undefined);
+      if (!request.success || request.data.launchId !== process.env["UNS_HANDOVER_LAUNCH_ID"]) return;
+      void this.drainForMigration().then(() => { process.channel?.unref(); }, error => {
+        logger.error(`${this.processName} - Cooperative stop unconfirmed; same owner and pending work retained.`, error);
+      });
+    };
+    process.on("message", this.cooperativeStopHandler);
+    (process as unknown as { emit(event: string, value: unknown): boolean }).emit(MQTT_DRAIN_READY_EVENT, { protocol: 1, cooperativeStopProtocol: 1, ...(this.statefulHandover ? { handoverProtocol: 2 } : {}) });
   }
 
   /** Optional single signal owner for applications without their own cleanup handler. */
-  public installSignalHandlers(): void {
+  public installSignalHandlers(options: { retainOnFailure?: boolean } = {}): void {
     if (this.signalCleanupInstalled) return;
     this.signalCleanupInstalled = true;
+    let stopping = false;
     const stop = () => {
-      void this.drainForMigration().then(() => process.exit(0), () => process.exit(1));
+      if (stopping) return;
+      stopping = true;
+      void this.drainForMigration().then(() => process.exit(0), error => {
+        stopping = false;
+        if (!options.retainOnFailure) process.exit(1);
+        else logger.error(`${this.processName} - Stop unconfirmed; pending work retained. Retry after recovery.`, error);
+      });
     };
-    process.once("SIGINT", stop);
-    process.once("SIGTERM", stop);
+    this.signalStopHandler = stop;
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
   }
 
   /** Works without a Controller too; success means confirmed empty output and closed owners. */
@@ -362,7 +381,7 @@ class UnsProxyProcess {
       const receipt = await drainMqttForMigration({
         quiesce: async () => {
           this.handoverShutdown?.onRelease?.();
-          await Promise.all(this.unsMqttProxies.map(proxy => proxy.setSubscriberPassiveAndDrainQueue()));
+          await Promise.all(this.unsMqttProxies.map(proxy => proxy.drainInputForStop()));
         },
         finishAccepted: async () => { await this.handoverShutdown?.drain(); },
         outputs: this.unsMqttProxies,
@@ -440,6 +459,13 @@ class UnsProxyProcess {
       const registry = globalThis as unknown as Record<symbol, unknown>;
       if (registry[MQTT_DRAIN_HANDLER] === this.migrationDrainHandler) delete registry[MQTT_DRAIN_HANDLER];
       process.channel?.unref();
+    }
+    if (this.cooperativeStopHandler) process.off("message", this.cooperativeStopHandler);
+    if (this.signalStopHandler) {
+      process.off("SIGINT", this.signalStopHandler);
+      process.off("SIGTERM", this.signalStopHandler);
+      this.signalStopHandler = undefined;
+      this.signalCleanupInstalled = false;
     }
     logger.info(`${this.processName} - Shutdown complete.`);
   }

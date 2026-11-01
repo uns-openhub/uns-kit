@@ -112,6 +112,15 @@ export default class MqttProxy {
     }
   }
 
+  /** Stop broker admission before draining already received application input. */
+  public async pauseSubscriptions(): Promise<void> {
+    const topics = [this.mqttSubToTopics].flat();
+    if (!topics.length) return;
+    await new Promise<void>((resolve, reject) => {
+      this.mqttClient.unsubscribe(topics, error => error ? reject(error) : resolve());
+    });
+  }
+
   private buildServers(defaultProtocol: IMqttParameters["protocol"]): IClientOptions["servers"] | undefined {
     const servers: IClientOptions["servers"] = [];
     const { port } = this.mqttParameters;

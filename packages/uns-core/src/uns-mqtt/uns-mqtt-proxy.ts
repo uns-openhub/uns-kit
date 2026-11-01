@@ -109,12 +109,17 @@ export default class UnsMqttProxy extends UnsProxy {
   /** Current worker transport connection; does not imply an archive/database commit. */
   public getConnectionReadiness(): boolean { return this.lifecycleState === "running" && this.connectionReady; }
   /** Latest broker SUBACK evidence; false before startup, disconnect or worker failure. */
-  public getInputReadiness(): boolean { return this.lifecycleState === "running" && this.subscriptionsReady; }
+  public getInputReadiness(): boolean { return this.lifecycleState === "running" && this.subscriptionsReady && !this.managedInputFailure; }
   private expectedWorkerExit = false;
   private publishQueueStatus?: MqttPublishQueueStatus;
   private publishesSealed = false;
   private admissionBytes = new Map<string, number>();
   private pendingAdmissionBytes = 0;
+  private capacityWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
+  private capacityReservations = 0;
+  private inputHandler?: (event: UnsEvents["input"]) => Promise<void>;
+  private pendingManagedInput?: { id: string; event: UnsEvents["input"] };
+  private managedInputFailure?: Error;
   private queueRequests = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; readResult?: (value: unknown) => void }>();
 
 
@@ -133,6 +138,7 @@ export default class UnsMqttProxy extends UnsProxy {
     // Bind state to semantic revision and actual endpoints/subscriptions, never credentials or client IDs.
     this.stateCompatibility = contract ? createHash("sha256").update(JSON.stringify({
       stateFormat: MQTT_HANDOVER_STATE_FORMAT, contract, host: mqttHost, ssl: unsParameters?.mqttSSL ?? false,
+      ...(unsParameters?.managedInput ? { managedInput: true } : {}),
       port: unsParameters?.port ?? null, protocol: unsParameters?.protocol ?? null,
       hosts: unsParameters?.hosts ?? [], servers: unsParameters?.servers ?? [],
       subscriptions: [unsParameters?.mqttSubToTopics ?? []].flat().slice().sort(),
@@ -174,6 +180,14 @@ export default class UnsMqttProxy extends UnsProxy {
       servername: unsParameters?.servername,
     };
     this.unsParameters = { ...(unsParameters ?? {}) };
+    if (unsParameters?.publishBackpressure) {
+      const max = unsParameters.maxPendingPublishes;
+      const waiting = unsParameters.publishBackpressure.maxWaiting ?? 32;
+      if (!Number.isInteger(max) || max! < 1 || !Number.isInteger(waiting) || waiting < 1 || waiting > 1024)
+        throw Error("Publish backpressure requires a positive bounded publish limit and 1..1024 waiters");
+      if (unsParameters.publishQueue?.enabled !== false && unsParameters.publishQueue)
+        throw Error("RAM admission backpressure cannot replace persistent outbox capacity policy");
+    }
     if (unsParameters?.publishQueue) {
       const queue = mqttPublishQueueSchema.parse(unsParameters.publishQueue);
       if (queue.enabled === false) {
@@ -244,6 +258,7 @@ export default class UnsMqttProxy extends UnsProxy {
       publishThrottlingDelay: this.unsParameters.publishThrottlingDelay ?? 1,
       publishConcurrency: this.unsParameters.publishConcurrency ?? 1,
       maxPendingPublishes: this.unsParameters.maxPendingPublishes,
+      managedInput: this.unsParameters.managedInput,
       subscribeThrottlingDelay: this.unsParameters.subscribeThrottlingDelay ?? 1,
       persistToDisk: false,
       publishQueue: this.unsParameters.publishQueue,
@@ -294,7 +309,11 @@ export default class UnsMqttProxy extends UnsProxy {
         }
         this.notifyDrainWaiters();
       } else if (msg && msg.command === "input") {
-        this.event.emit("input", { topic: msg.topic, message: msg.message.toString(), packet: msg.packet });
+        const event = { topic: msg.topic, message: msg.message.toString(), packet: msg.packet };
+        if (this.unsParameters.managedInput) {
+          if (!this.inputHandler && typeof msg.id === "string") this.pendingManagedInput = { id: msg.id, event };
+          else void this.handleManagedInput(msg.id, event);
+        } else this.event.emit("input", event);
       } else if (msg && (msg.command === "handover_subscriber" || msg.command === "handover_publisher")) {
         this.event.emit("mqttWorker", { command: msg.command, batchSize: msg.batchSize, referenceHash: msg.referenceHash, ...(msg.processedTail ? {processedTail: msg.processedTail} : {}), instanceName: this.instanceName });
       } else if (msg && msg.command === "mqttProxyStatus") {
@@ -336,6 +355,19 @@ export default class UnsMqttProxy extends UnsProxy {
    * @returns A promise that resolves when the message is accepted into the worker queue.
    */
   private async enqueueMessageToWorkerQueue(topic: string, message: string, options?: IClientPublishOptions): Promise<void> {
+    if (this.unsParameters.publishBackpressure) {
+      this.assertAdmissionOpen();
+      const max = this.unsParameters.maxPendingPublishes!;
+      if (this.capacityWaiters.length || this.pendingEnqueues.size + this.pendingPublishCompletions.size + this.capacityReservations >= max) {
+        if (this.capacityWaiters.length >= (this.unsParameters.publishBackpressure.maxWaiting ?? 32))
+          throw Error("MQTT output backpressure waiter limit reached; publication was not admitted");
+        await new Promise<void>((resolve, reject) => {
+          this.capacityWaiters.push({ resolve, reject });
+          this.notifyDrainWaiters();
+        });
+        this.capacityReservations--;
+      }
+    }
     return new Promise((resolve, reject) => {
       if (this.publishesSealed) { reject(Error("MQTT output admission is sealed after clean migration drain")); return; }
       if (this.lifecycleState !== "running") {
@@ -369,6 +401,33 @@ export default class UnsMqttProxy extends UnsProxy {
       }
       this.notifyDrainWaiters();
     });
+  }
+
+  private assertAdmissionOpen(): void {
+    if (this.publishesSealed || this.lifecycleState !== "running") throw Error("MQTT output admission is closed");
+    if (this.workerFailure) throw this.workerFailure;
+  }
+
+  /** Register before enableMigrationDrain. Legacy event listeners are unchanged. */
+  public setInputHandler(handler: (event: UnsEvents["input"]) => Promise<void>): void {
+    if (!this.unsParameters.managedInput || this.inputHandler) throw Error("Managed MQTT input requires one explicitly declared handler");
+    this.inputHandler = handler;
+    const pending = this.pendingManagedInput;
+    this.pendingManagedInput = undefined;
+    if (pending) void this.handleManagedInput(pending.id, pending.event);
+  }
+
+  private async handleManagedInput(id: unknown, event: UnsEvents["input"]): Promise<void> {
+    if (typeof id !== "string") return;
+    try {
+      if (!this.inputHandler || this.managedInputFailure) throw Error("Managed MQTT input handler is unavailable");
+      await this.inputHandler(event);
+      this.worker.postMessage({ command: "inputComplete", id, status: "success" });
+    } catch (error) {
+      this.managedInputFailure = error instanceof Error ? error : Error("Managed MQTT input failed");
+      this.worker.postMessage({ command: "inputComplete", id, status: "error" });
+      this.event.emit("error", { code: 0, message: "Managed MQTT input failed; original input retained, clean migration requires review" });
+    }
   }
 
   /**
@@ -505,9 +564,18 @@ export default class UnsMqttProxy extends UnsProxy {
    */
   public async setSubscriberPassiveAndDrainQueue(strict = false): Promise<UnsEvents["mqttWorker"]> {
     const mqttWorkerData = await this.setSubscriberPassive(strict);
+    if (this.managedInputFailure) throw this.managedInputFailure;
     await this.flush();
     logger.info(`${this.instanceNameWithSuffix} - Subscriber set to passive and queue drained.`);
     return mqttWorkerData;
+  }
+
+  /** Ordinary stop drains received owned input; live handover keeps its cutover cursor. */
+  public async drainInputForStop(): Promise<void> {
+    if (this.unsParameters.managedInput) {
+      await this.subscriberControl("drainSubscriberInput");
+      if (this.managedInputFailure) throw this.managedInputFailure;
+    } else await this.setSubscriberPassiveAndDrainQueue();
   }
 
   public async drainPublishes(timeoutMs: number = UnsMqttProxy.DEFAULT_DRAIN_TIMEOUT_MS): Promise<void> {
@@ -518,7 +586,7 @@ export default class UnsMqttProxy extends UnsProxy {
       await this.requestPublishQueue("flushPublishes", timeoutMs);
       return;
     }
-    if (this.pendingEnqueues.size === 0 && this.pendingPublishCompletions.size === 0) {
+    if (this.pendingEnqueues.size === 0 && this.pendingPublishCompletions.size === 0 && !this.capacityWaiters.length && !this.capacityReservations) {
       return;
     }
     await new Promise<void>((resolve, reject) => {
@@ -953,6 +1021,7 @@ export default class UnsMqttProxy extends UnsProxy {
   }
 
   private rejectOutstandingPublishes(reason: Error): void {
+    for (const waiter of this.capacityWaiters.splice(0)) waiter.reject(reason);
     for (const pending of this.pendingEnqueues.values()) {
       pending.reject(reason);
     }
@@ -970,6 +1039,11 @@ export default class UnsMqttProxy extends UnsProxy {
   }
 
   private notifyDrainWaiters(): void {
+    if (!this.workerFailure && !this.publishesSealed && this.lifecycleState === "running" && this.capacityWaiters.length
+        && this.pendingEnqueues.size + this.pendingPublishCompletions.size + this.capacityReservations < this.unsParameters.maxPendingPublishes!) {
+      this.capacityReservations++;
+      this.capacityWaiters.shift()!.resolve();
+    }
     if (this.workerFailure) {
       const waiters = this.drainWaiters.splice(0);
       for (const waiter of waiters) {
@@ -980,7 +1054,7 @@ export default class UnsMqttProxy extends UnsProxy {
       }
       return;
     }
-    if (this.pendingEnqueues.size !== 0 || this.pendingPublishCompletions.size !== 0) {
+    if (this.pendingEnqueues.size !== 0 || this.pendingPublishCompletions.size !== 0 || this.capacityWaiters.length || this.capacityReservations) {
       return;
     }
     const waiters = this.drainWaiters.splice(0);

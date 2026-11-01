@@ -16,7 +16,7 @@ Register application cleanup before making proxies, and acknowledge readiness on
 after input handlers and initial metadata have been prepared:
 
 ```ts
-import { UnsProxyProcess } from '@uns-kit/core/uns/uns-proxy-process.js';
+import { UnsProxyProcess } from '@uns-kit/core';
 
 const accepted = new Set<Promise<void>>();
 const runtime = new UnsProxyProcess(infraHost, {
@@ -46,6 +46,72 @@ the original process to exit successfully before starting a successor. Duplicate
 requests share the in-flight SDK drain. Timeout, missing receipt, retained output,
 or an unknown outcome blocks activation and requires reconciliation of the same
 operation. Hosts must not race this handshake with a forced PM2 stop.
+
+## Async input and a full RAM publisher (3.0.40)
+
+An event listener that starts async work without awaiting it can empty an input
+queue into thousands of concurrent publications. The publisher limit still
+protects memory, but rejected work cannot be called a clean migration. Use the
+same opt-in SDK mechanism for any source adapter:
+
+A complete SDK-only example is [managed-mqtt-forwarder.mjs](examples/managed-mqtt-forwarder.mjs).
+It uses a project's own package identity and does not import any microservice.
+
+```ts
+const output = await runtime.createUnsMqttProxy(outputHost, 'observations', mode, true, {
+  handoverStateContract: 'inspection-observation-v1',
+  defaultPublishOptions: { qos: 1 },
+  maxPendingPublishes: 1000,
+  publishBackpressure: { maxWaiting: 32 },
+});
+const input = await runtime.createUnsMqttProxy(inputHost, 'frames', mode, true, {
+  handoverStateContract: 'inspection-frame-v1',
+  mqttSubToTopics: ['factory/inspection/frames'],
+  managedInput: true,
+});
+input.setInputHandler(async event => {
+  for (const observation of decodeFrame(event.message)) {
+    await output.publishMqttMessage(observation);
+  }
+});
+runtime.enableMigrationDrain();
+runtime.installSignalHandlers({ retainOnFailure: true });
+```
+
+One input remains owned by the worker until this callback completes. Output
+capacity waiting is FIFO and bounded; it does not retry the callback, increase
+the output limit or move its pending data into an unbounded promise backlog.
+Wait only on capacity known not to have admitted this particular publication.
+Actual publisher/worker failures still block clean migration. A failed handler
+retains its input for review; never retry it automatically after a partial effect.
+
+For ordinary stop, the SDK awaits broker unsubscribe acknowledgement and drains
+already accepted owned input before flushing output and closing workers. For hot
+handover, it takes the normal verified input boundary instead. Stop on a passive
+shadow never executes its redundant inputs. A timeout retains work and gives no
+clean receipt; after the destination recovers, reconcile/retry the same stop.
+The retain-on-failure signal owner coalesces concurrent signals and allows a
+later retry. Do not combine it with custom process signal handlers.
+
+`enableMigrationDrain()` also installs the launch-bound SDK cooperative-stop
+handler (`uns-kit:mqtt-stop:v1`). Its prepared readiness event advertises
+`cooperativeStopProtocol: 1`. A supporting Controller binds that evidence to the
+exact PM2 launch and sends the shared request instead of arming PM2's forced-stop
+timer. It reports success only after a natural zero exit; timeout leaves the
+same owner available for retry. Migration fences continue using their existing
+guarded drain, and are never removed by ordinary Stop.
+
+This needs the corresponding generic Controller support. A legacy host's
+`pm2.stop` may still send SIGKILL after its deadline; an SDK handler cannot
+prevent SIGKILL or preserve RAM after it. Upgrade the host before relying on
+retention for a blocked ordinary Stop. The cooperative protocol itself does not
+authorize a caller: platform authentication and exact launch ownership remain
+Controller responsibilities.
+
+RAM data is still lost if the process is killed. This is neither a durable input
+journal nor a promise that a stopped subscriber receives future broker events.
+Enabling managed input changes compatibility, so review an initial cold upgrade
+before migrating matching managed peers. Existing non-opt-in services are unchanged.
 
 ## Explicitly disabled persistence before a mount exists
 

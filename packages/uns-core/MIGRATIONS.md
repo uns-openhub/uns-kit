@@ -9,6 +9,35 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.40 - Managed asynchronous MQTT input and bounded RAM output pressure
+
+When crossing `<3.0.40` to `>=3.0.40`, legacy input events and queue rejection
+remain unchanged. A consumer may opt into `managedInput: true`, then register
+exactly one `setInputHandler(async event => { ... })` before readiness. Await all
+publication/admitted work inside it. The worker advances its processed cursor only
+after completion; an application exception retains the original input and blocks
+automatic replay because external effects may be unknown.
+
+RAM publishers may combine a finite `maxPendingPublishes` with
+`publishBackpressure: { maxWaiting: 32 }`. Admission waits for capacity rather
+than raising the record bound. The waiter count is bounded too; it is not disk
+persistence, cancellation or permission to retry unknown effects. Persistent
+outboxes keep their own capacity policy and cannot select this RAM option.
+
+Managed input changes the semantic compatibility digest. Review an initial
+stop-before-start upgrade from an unmanaged input, then use matching peers for
+hot moves. Ordinary stop unsubscribes before draining accepted owned input; live
+handover retains its verified cutover cursor. A passive shadow is never activated
+by Stop. `installSignalHandlers({ retainOnFailure: true })` retains workers and
+pending work after an unconfirmed drain and allows a later signal to retry.
+Do not add a second signal owner or cache a failed application stop promise.
+The SDK announces cooperative-stop protocol1 only after installing its
+launch-bound handler. Upgrade to a Controller that honors this readiness and
+uses the shared `mqttCooperativeStopRequestSchema`; an older PM2 forced-stop
+deadline cannot be prevented by SDK signal handling. No Controller decision may
+depend on an application or profile name.
+See the [generic MQTT drain example](https://github.com/uns-openhub/uns-kit/blob/master/docs/mqtt-migration-drain.md#async-input-and-a-full-ram-publisher-3040).
+
 ## 3.0.39 - Explicit read-only HTTP work during migration
 
 When crossing `<3.0.39` to `>=3.0.39`, existing handlers keep their conservative

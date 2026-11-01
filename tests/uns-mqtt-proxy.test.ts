@@ -60,6 +60,74 @@ const getLastWorker = (): InstanceType<typeof FakeWorker> => {
 };
 
 describe("UnsMqttProxy publish drain contract", () => {
+  it.each(["energy-stream", "vision-inspection"])("bounds output and waits in order without replay for %s", async name => {
+    const proxy = new UnsMqttProxy("localhost", name, "out", {
+      maxPendingPublishes: 1, publishBackpressure: { maxWaiting: 2 },
+    });
+    const worker = getLastWorker();
+    const first = proxy.publishMessage("local/data", "one");
+    const second = proxy.publishMessage("local/data", "two");
+    const third = proxy.publishMessage("local/data", "three");
+    await expect(proxy.publishMessage("local/data", "not-admitted")).rejects.toThrow("waiter limit");
+    expect(worker.postedMessages.filter(m => m.command === "enqueue")).toHaveLength(1);
+    let drained = false;
+    const flush = proxy.flush().then(() => { drained = true; });
+    for (const [index, promise, message] of [[0, first, "one"], [1, second, "two"], [2, third, "three"]] as const) {
+      await vi.waitFor(() => expect(worker.postedMessages.filter(m => m.command === "enqueue")).toHaveLength(index + 1));
+      const enqueue = worker.postedMessages.filter(m => m.command === "enqueue")[index];
+      expect(enqueue.message).toBe(message);
+      worker.emit("message", { command: "enqueueAccepted", id: enqueue.id, status: "accepted" });
+      await promise;
+      expect(drained).toBe(false);
+      worker.emit("message", { command: "publishResult", id: enqueue.id, status: "success" });
+    }
+    await flush;
+    expect(drained).toBe(true);
+    await proxy.stop({ drain: false });
+  });
+
+  it("rejects all waiting admission when the worker fails, without certifying an empty output", async () => {
+    const proxy = new UnsMqttProxy("localhost", "generic", "out", { maxPendingPublishes: 1, publishBackpressure: {} });
+    const worker = getLastWorker();
+    const first = proxy.publishMessage("local/data", "one");
+    const waiting = proxy.publishMessage("local/data", "two");
+    const assertions = [expect(first).rejects.toThrow("worker fault"), expect(waiting).rejects.toThrow("worker fault")];
+    worker.emit("error", Error("worker fault"));
+    await Promise.all(assertions);
+    await expect(proxy.flush()).rejects.toThrow("worker fault");
+    await proxy.stop({ drain: false });
+  });
+
+  it("acknowledges managed input only after async work and retains an unknown failed result", async () => {
+    const proxy = new UnsMqttProxy("localhost", "generic", "in", { managedInput: true });
+    const worker = getLastWorker();
+    let finish!: () => void;
+    proxy.setInputHandler(async event => {
+      if (event.message === "fail") throw Error("unknown effect");
+      await new Promise<void>(resolve => { finish = resolve; });
+    });
+    worker.emit("message", { command: "input", id: "a", topic: "local/source", message: "one" });
+    expect(worker.postedMessages).toHaveLength(0);
+    finish();
+    await vi.waitFor(() => expect(worker.postedMessages).toContainEqual({ command: "inputComplete", id: "a", status: "success" }));
+    worker.emit("message", { command: "input", id: "b", topic: "local/source", message: "fail" });
+    await vi.waitFor(() => expect(worker.postedMessages).toContainEqual({ command: "inputComplete", id: "b", status: "error" }));
+    expect(proxy.getInputReadiness()).toBe(false);
+    expect(() => proxy.setInputHandler(async () => {})).toThrow("one explicitly");
+    await proxy.stop({ drain: false });
+  });
+
+  it("retains a first input arriving before registration rather than losing the startup race", async () => {
+    const proxy = new UnsMqttProxy("localhost", "other-service", "input", { managedInput: true });
+    const worker = getLastWorker();
+    worker.emit("message", { command: "input", id: "early", topic: "local/source", message: "original" });
+    expect(worker.postedMessages).toHaveLength(0);
+    const consume = vi.fn(async () => {});
+    proxy.setInputHandler(consume);
+    await vi.waitFor(() => expect(worker.postedMessages).toContainEqual({ command: "inputComplete", id: "early", status: "success" }));
+    expect(consume).toHaveBeenCalledWith(expect.objectContaining({ message: "original" }));
+    await proxy.stop({ drain: false });
+  });
   afterEach(async () => {
     const workers = [...FakeWorker.instances];
     FakeWorker.instances.length = 0;
