@@ -22,7 +22,19 @@ export const valueTypes = ["string", "number"] as const;
 export type ValueTypeString = (typeof valueTypes)[number];
 export type ScalarValueType = string | number;
 /** Scalar telemetry or a scalar array used by metadata such as relationship evidence. */
-export type ValueType = ScalarValueType | ScalarValueType[];
+export type ValueType = ScalarValueType | ScalarValueType[] | null;
+
+/** A null is an explicit typed clear, not a missing field or inferred object. */
+export function scalarDataValueType(value: unknown, declared?: unknown): ValueTypeString {
+  if (value === null) {
+    if (declared === "string" || declared === "number") return declared;
+    throw new Error("Null data requires explicit valueType string or number");
+  }
+  const inferred = typeof value;
+  if (inferred !== "string" && inferred !== "number")
+    throw new Error("Value in data object must be string or number");
+  return inferred;
+}
 
 export type CounterResetPolicy = "new-value" | "null" | "rollover" | (string & {});
 
@@ -113,6 +125,8 @@ export function isQuestDbType(value: unknown): value is QuestDbType {
 }
 
 export interface IUnsParameters {
+  /** Opt in to typed null/clear publications and a distinct handover contract. */
+  allowNullData?: boolean;
   /** Stable semantic revision of calculation state; change when meaning/scaling changes. Required for correlated-v2. */
   handoverStateContract?: string;
   /** Optional MQTT output persistence; absence keeps issued queue behavior. */
@@ -242,6 +256,8 @@ export interface IUnsData {
   [key: string]: unknown;
   time: ISO8601;
   value: ValueType;
+  /** Required for an explicit null/clear; ordinary scalar types remain inferred. */
+  valueType?: ValueTypeString;
   /** Storage/routing group for consumers such as archivers; not part of the UNS identity path. */
   dataGroup?: string;
   uom?: MeasurementUnit;

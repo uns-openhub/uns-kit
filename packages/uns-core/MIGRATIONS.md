@@ -9,6 +9,21 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.41 - Explicit typed null scalar clears
+
+Null publication is opt-in per MQTT publisher (`allowNullData: true`). A null
+`data.value` must declare `data.valueType: "string" | "number"`; it is an explicit
+clear with its own timestamp, not an omitted update, zero, empty string, object or
+delete command. Ordinary scalar inference and non-opted publishers stay unchanged.
+Update every required reader to a compatible SDK before enabling a producer.
+
+The nullable opt-in is bound into peer compatibility without changing ordinary
+format 3 hashes. Old/non-opted peers reject before the source relinquishes ownership.
+Snapshots retain the null plus declared scalar type; null cannot be differentiated.
+Keep the normal reviewed operation/recovery rules. Do not relabel a state contract
+to bypass mixed-peer rejection. See the
+[contract and generic example](https://github.com/uns-openhub/uns-kit/blob/master/docs/mqtt-null-data.md).
+
 ## 3.0.40 - Managed asynchronous MQTT input and bounded RAM output pressure
 
 When crossing `<3.0.40` to `>=3.0.40`, legacy input events and queue rejection

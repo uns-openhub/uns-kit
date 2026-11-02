@@ -273,6 +273,14 @@ and apply only the migrations whose version boundaries are crossed. The
 `3.0.0` migration documents the MQTT table-column object contract, while the
 `2.0.71` migration documents MQTT publish and shutdown ownership changes.
 
+## Explicit scalar clears (3.0.41)
+
+An opted-in publisher can send a typed `null` clear with its own timestamp.
+Read the [generic contract and examples](https://github.com/uns-openhub/uns-kit/blob/master/docs/mqtt-null-data.md)
+and the reader-first upgrade requirements in `MIGRATIONS.md`. Ordinary scalar
+publications stay unchanged; no business meaning or universal exactly-once
+guarantee is inferred by the SDK.
+
 ## State-preserving MQTT handover
 
 Correlated-v2 MQTT handover in3.0.38 verifies a uniquely shared input boundary

@@ -50,6 +50,8 @@ For optional configuration-owned resources prepared in3.0.29, see the
 [same-journal paired version upgrades](docs/process-group-version-upgrade.md).
 For ordinary MQTT services, see [clean migration drain and explicitly disabled
 output persistence](docs/mqtt-migration-drain.md).
+For optional typed scalar clears in 3.0.41, see the
+[reader-first upgrade contract and example](docs/mqtt-null-data.md).
 SDK npm publication, compatible host/helper releases and deployment are separate.
 For the active cross-repository migration of MQTT table columns from arrays to
 named objects, see

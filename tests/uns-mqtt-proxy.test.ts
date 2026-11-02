@@ -60,6 +60,58 @@ const getLastWorker = (): InstanceType<typeof FakeWorker> => {
 };
 
 describe("UnsMqttProxy publish drain contract", () => {
+  it.each(["inspection-stream", "unrelated-sensor"])("roundtrips typed null state only after opt-in for %s", async name => {
+    const options = { handoverStateContract: "explicit-clear-v1", allowNullData: true };
+    const proxy = new UnsMqttProxy("localhost", name, "out", options);
+    let metadata: ITopicObject[] = [];
+    proxy.event.on("unsProxyProducedTopics", event => { metadata = event.producedTopics; });
+    const worker = getLastWorker();
+    const promise = proxy.publishMqttMessage({
+      topic: "example/", asset: "", objectType: "", objectId: "",
+      attributes: [{ attribute: "status", data: {
+        time: "2026-11-02T12:00:00.000Z", value: null, valueType: "string",
+      } }],
+    });
+    await vi.waitFor(() => expect(worker.postedMessages.filter(m => m.command === "enqueue")).toHaveLength(1));
+    const sent = worker.postedMessages.find(m => m.command === "enqueue");
+    expect(JSON.parse(sent.message).message.data).toMatchObject({ value: null, valueType: "string" });
+    worker.emit("message", { command: "enqueueAccepted", id: sent.id, status: "accepted" });
+    worker.emit("message", { command: "publishResult", id: sent.id, status: "success" });
+    await promise;
+    expect(metadata.find(entry => entry.attribute === "status")).toMatchObject({ valueType: "string" });
+    const state = proxy.exportHandoverState({ batchSize: 0, referenceHash: createHash("sha256").update("[]").digest("hex") });
+    expect(state.values[0]).toMatchObject({ value: null, valueType: "string" });
+    const successor = new UnsMqttProxy("localhost", name, "out", options);
+    successor.importHandoverState(state);
+    expect(successor.exportHandoverState(state.cursor).values).toEqual(state.values);
+    const ordinary = new UnsMqttProxy("localhost", name, "out", { handoverStateContract: "explicit-clear-v1" });
+    expect(ordinary.getHandoverCompatibility()).not.toEqual(proxy.getHandoverCompatibility());
+    expect(() => ordinary.importHandoverState(state)).toThrow("did not opt");
+    for (const p of [proxy, successor, ordinary]) await p.stop({ drain: false });
+  });
+
+  it("keeps ordinary peer compatibility identical to SDK 3.0.40", async () => {
+    const proxy = new UnsMqttProxy("localhost", "other-app", "out", { handoverStateContract: "same" });
+    const expected = createHash("sha256").update(JSON.stringify({
+      stateFormat: 3, contract: "same", host: "localhost", ssl: false,
+      port: null, protocol: null, hosts: [], servers: [], subscriptions: [],
+    })).digest("hex");
+    expect(proxy.getHandoverCompatibility().compatibility).toBe(expected);
+    await proxy.stop({ drain: false });
+  });
+
+  it("rejects a non-opted null and null arithmetic before admission", async () => {
+    const message = { topic: "example/", asset: "", objectType: "", objectId: "",
+      attributes: [{ attribute: "x", data: { time: "2026-11-02T12:00:00.000Z" as const,
+        value: null, valueType: "number" as const } }] };
+    const ordinary = new UnsMqttProxy("localhost", "generic", "out");
+    await expect(ordinary.publishMqttMessage(message)).rejects.toThrow("opt into");
+    expect(getLastWorker().postedMessages).toHaveLength(0);
+    const opted = new UnsMqttProxy("localhost", "generic", "out", { allowNullData: true });
+    await expect(opted.publishMqttMessage(message, MessageMode.Delta)).rejects.toThrow("cannot be differentiated");
+    expect(getLastWorker().postedMessages).toHaveLength(0);
+    await ordinary.stop({ drain: false }); await opted.stop({ drain: false });
+  });
   it.each(["energy-stream", "vision-inspection"])("bounds output and waits in order without replay for %s", async name => {
     const proxy = new UnsMqttProxy("localhost", name, "out", {
       maxPendingPublishes: 1, publishBackpressure: { maxWaiting: 2 },

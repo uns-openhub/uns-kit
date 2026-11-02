@@ -20,7 +20,14 @@ export const mqttHandoverOfferSchema = z.array(z.strictObject({
 export const mqttProxyHandoverStateSchema = z.strictObject({
   instanceName: z.string().min(1).max(256),
   compatibility: z.string().regex(/^[a-f0-9]{64}$/),
-  values: z.array(z.strictObject({ topic: text, value, uom: z.string().max(256).optional(), timestamp: z.string().datetime() })).max(10000),
+  values: z.array(z.strictObject({
+    topic: text, value: value.nullable(),
+    valueType: z.enum(["string", "number"]).optional(),
+    uom: z.string().max(256).optional(), timestamp: z.string().datetime(),
+  }).superRefine((entry, ctx) => {
+    if (entry.value === null && !entry.valueType)
+      ctx.addIssue({ code: "custom", message: "Null state requires its declared scalar type" });
+  })).max(10000),
   sequences: z.array(z.tuple([text, z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)])).max(10000),
   cursor: inputCursorSchema,
 }).superRefine((state, ctx) => {

@@ -14,7 +14,7 @@ import {
   IUnsTableColumn,
   IUnsTableColumns,
   isQuestDbType,
-  valueTypes
+  scalarDataValueType
 } from "./uns-interfaces.js";
 
 // Version of the MQTT packet wire contract emitted by this library.
@@ -237,9 +237,7 @@ export class UnsPacket {
       if (data.value === undefined) {
         throw new Error(`Value is not defined in data object`);
       }
-      if (!valueTypes.includes(typeof data.value as (typeof valueTypes)[number])) {
-        throw new Error(`Value in data object must be string or number`);
-      }
+      scalarDataValueType(data.value, data.valueType);
       if (data.intervalStart !== undefined && !isIsoOrEpoch(data.intervalStart)) {
         throw new Error(`intervalStart is not ISO8601 or epoch ms`);
       }
@@ -339,13 +337,10 @@ export class UnsPacket {
         let data: IUnsExtendedData | undefined;
 
         if (message.data && message.data.value !== undefined) {
-          const valueType = typeof message.data.value;
-          if (!valueTypes.includes(valueType as (typeof valueTypes)[number])) {
-            throw new Error(`Value in data object must be string or number`);
-          }
+          const valueType = scalarDataValueType(message.data.value, message.data.valueType);
           data = {
             ...message.data,
-            valueType: valueType as (typeof valueTypes)[number]
+            valueType
           }
         };
 

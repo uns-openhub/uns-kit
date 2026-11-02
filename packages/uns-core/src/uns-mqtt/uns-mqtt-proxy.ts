@@ -90,7 +90,7 @@ type InternalMqttMessage = {
 export default class UnsMqttProxy extends UnsProxy {
   public static readonly DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
   private readonly stateCompatibility: string | undefined;
-  private lastValues: Map<string, { value: ValueType; uom: string | undefined; timestamp: Date }> = new Map();
+  private lastValues: Map<string, { value: ValueType; valueType?: "string" | "number"; uom: string | undefined; timestamp: Date }> = new Map();
   private worker: Worker;
   private pendingEnqueues: Map<string, { resolve: () => void; reject: (reason?: any) => void }> = new Map();
   private pendingPublishCompletions = new Set<string>();
@@ -139,6 +139,7 @@ export default class UnsMqttProxy extends UnsProxy {
     this.stateCompatibility = contract ? createHash("sha256").update(JSON.stringify({
       stateFormat: MQTT_HANDOVER_STATE_FORMAT, contract, host: mqttHost, ssl: unsParameters?.mqttSSL ?? false,
       ...(unsParameters?.managedInput ? { managedInput: true } : {}),
+      ...(unsParameters?.allowNullData ? { explicitNullData: 1 } : {}),
       port: unsParameters?.port ?? null, protocol: unsParameters?.protocol ?? null,
       hosts: unsParameters?.hosts ?? [], servers: unsParameters?.servers ?? [],
       subscriptions: [unsParameters?.mqttSubToTopics ?? []].flat().slice().sort(),
@@ -479,6 +480,8 @@ export default class UnsMqttProxy extends UnsProxy {
 
   public validateHandoverState(input: MqttProxyHandoverState): void {
     const state = mqttProxyHandoverStateSchema.parse(input);
+    if (!this.unsParameters?.allowNullData && state.values.some(entry => entry.value === null))
+      throw Error("MQTT successor did not opt into typed null data");
     if (!this.stateCompatibility || state.compatibility !== this.stateCompatibility)
       throw Error("MQTT destination, subscriptions or calculation-state contract changed; review migration compatibility");
     if (state.instanceName !== this.instanceName || this.lastValues.size || this.currentSequenceId.size)
@@ -490,7 +493,10 @@ export default class UnsMqttProxy extends UnsProxy {
     const state = mqttProxyHandoverStateSchema.parse(input);
     if (state.instanceName !== this.instanceName || this.lastValues.size || this.currentSequenceId.size)
       throw Error("MQTT successor state is not empty or belongs to another proxy");
-    this.lastValues = new Map(state.values.map(entry => [entry.topic, { value: entry.value, uom: entry.uom, timestamp: new Date(entry.timestamp) }]));
+    this.lastValues = new Map(state.values.map(entry => [entry.topic, {
+      value: entry.value, uom: entry.uom, timestamp: new Date(entry.timestamp),
+      ...(entry.valueType ? { valueType: entry.valueType } : {}),
+    }]));
     this.currentSequenceId = new Map(state.sequences.map(([topic, sequence]) => [topic, sequence]));
   }
 
@@ -680,6 +686,10 @@ export default class UnsMqttProxy extends UnsProxy {
             : "table" in attrEntry && attrEntry.table
               ? { table: attrEntry.table, createdAt: attrEntry.createdAt, expiresAt: attrEntry.expiresAt }
               : (() => { throw new Error("Attribute entry must include exactly one of data/table/message"); })();
+      if (message.data?.value === null) {
+        if (!this.unsParameters?.allowNullData) throw Error("Publisher must opt into typed null data");
+        if (mode !== MessageMode.Raw) throw Error("Null data cannot be differentiated");
+      }
       const packet = await UnsPacket.unsPacketFromUnsMessage(message);
       const singleMsg: InternalMqttMessage = {
         topic,
@@ -707,7 +717,7 @@ export default class UnsMqttProxy extends UnsProxy {
         description: attrDescription,
         tags: attrEntry.tags,
         attributeNeedsPersistence: attrEntry.attributeNeedsPersistence,
-        valueType: attrEntry.valueType,
+        valueType: attrEntry.valueType ?? (message.data?.value === null ? packet.message.data?.valueType : undefined),
         presentationKind: attrEntry.presentationKind,
         defaultAggregation: attrEntry.defaultAggregation,
         counterResetPolicy: attrEntry.counterResetPolicy,
@@ -905,7 +915,7 @@ export default class UnsMqttProxy extends UnsProxy {
         if (lastValueEntry && lastValueEntry.uom === newUom && typeof lastValueEntry.value === typeof newValue) {
           const intervalBetweenMessages = currentTime.getTime() - lastValueEntry.timestamp.getTime();
           const lastValue = lastValueEntry.value;
-          this.lastValues.set(publishTopic, { value: newValue, uom: newUom, timestamp: currentTime });
+          this.lastValues.set(publishTopic, { value: newValue, uom: newUom, timestamp: currentTime, ...(newValue === null ? { valueType: msg.packet.message.data.valueType } : {}) });
           // Compute the delta and manage cumulative resets
           if (valueIsCumulative == true && typeof newValue === "number" && typeof lastValue === "number") {
             // Skip if newValue is 0 (likely a glitch)
@@ -918,7 +928,7 @@ export default class UnsMqttProxy extends UnsProxy {
           msg.packet.interval = intervalBetweenMessages;
           await this.enqueueMessageToWorkerQueue(publishTopic, JSON.stringify(msg.packet));
         } else {
-          this.lastValues.set(publishTopic, { value: newValue, uom: newUom, timestamp: currentTime });
+          this.lastValues.set(publishTopic, { value: newValue, uom: newUom, timestamp: currentTime, ...(newValue === null ? { valueType: msg.packet.message.data.valueType } : {}) });
           logger.debug(`${this.instanceNameWithSuffix} - Need one more packet to calculate interval on topic ${publishTopic}`);
           if (valueIsCumulative === false) {
             await this.enqueueMessageToWorkerQueue(publishTopic, JSON.stringify(msg.packet));
