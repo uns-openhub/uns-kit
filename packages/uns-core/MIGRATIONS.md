@@ -9,6 +9,22 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.43 - Shared managed operator route registration
+
+This entry describes the prepared 3.0.43 release; npm publication is separate. Existing ordinary
+API endpoints and standalone services require no changes. Applications exposing
+`operatorOperations` must adopt the coordinated API/core release, then be launched
+by a Controller providing the reviewed route-token file and exact launch metadata.
+`UnsApiProxy` registers and renews its own route automatically; no application-name
+branch or custom route publisher is needed. Route credentials grant no data or
+operator-command permissions. See [the contract](../../docs/operator-api.md).
+
+Do not replace the owning Controller URL with a generic master URL, copy tokens
+into config, normalize the launch's version tag or broaden service scopes to make
+registration succeed. A Controller-only hot update cannot add launch metadata to
+an already running process. Use the normal reviewed restart/upgrade after the
+coordinated versions are published. Keep old application data and queues intact.
+
 ## 3.0.42 - Opt-in registered operator APIs and Service API body metadata
 
 Existing applications require no operator-API change when crossing this version.

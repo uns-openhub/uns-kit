@@ -1,8 +1,52 @@
 # Opt-in operator API contract
 
-This is a local source candidate extending published 3.0.41. It requires a new
-SDK release before an application can declare this feature in registry dependencies.
+The operator declaration/delegation contract was published in 3.0.42. Shared
+managed-route registration is prepared in 3.0.43 and requires npm publication
+and downstream dependency updates before deployment.
 Ordinary endpoints do not become operator operations automatically.
+
+## Managed route registration (3.0.43)
+
+For APIs with explicit `operatorOperations`, `@uns-kit/api` publishes a short-lived
+ownership receipt through the owning Controller's fixed
+`POST /api/runtime-services/routes` endpoint. No application-specific publisher,
+package-name branch or new data permission is required. A second unrelated
+application uses the same mechanism. The Controller must first bind an approved,
+active service identity to the installed instance and launch it with:
+
+- `UNS_ROUTE_TOKEN_FILE`: private, regular mode-600 file containing a narrow route
+  credential; it is reread on every renewal and must not be logged or copied into
+  application configuration.
+- `UNS_ROUTE_CONTROLLER_NAME`, `RTT_NODE`, `RTT_INSTANCE_ID`, `version` and
+  `UNS_ROUTE_LAUNCH_ID`: the exact launch identity. The SDK retains the launch's
+  version tag, including an existing `v` prefix; it does not invent one.
+- `UNS_CONTROLLER_PUBLIC_BASE`: the owning Controller origin. The existing
+  launcher host/port is a fallback when that origin is absent. Caller payloads
+  cannot select a registration destination or credential.
+
+The SDK registers the actual listening/published API origin after the first
+declared endpoint, renews the 30-second lease every 10 seconds and validates that
+the receipt matches this exact owner, process, instance, launch, version and
+origin. Registration uses its own purpose-specific credential, not a general
+service/data JWT or the operator-delegation JWT. It grants no data scopes and
+does not authorize a pause or any other application command.
+
+A missing route-token file environment variable preserves legacy/standalone
+startup without automatic registration. A partial opted-in environment is an
+explicit error. Unavailable or revoked ownership fails closed for managed
+operator dispatch; it does not stop unrelated data processing. Requests are
+bounded, redirects refused, stalled transports remain coalesced, and stopping the
+API cancels renewal without waiting indefinitely for the Controller. A lost
+receipt may be retried for the same launch/origin. The Controller remains the
+authority for freshness, unique live ownership, operator grants and command review.
+
+For a custom HTTP integration the reusable client is exported as
+`RuntimeRouteRegistration` and `runtimeRouteRegistrationEnvironment` from
+`@uns-kit/api/runtime-route-registration.js`. The wire schemas/types and receipt
+validator are shared through `@uns-kit/core/runtime/route-registration.js`.
+Ordinary `UnsApiProxy` applications only declare their operator endpoints; the
+host supplies managed launch authority. Preparing this source release does not
+establish npm publication or production deployment.
 
 `@uns-kit/core/runtime/operator-api.js` defines the version-one declaration,
 canonical bounded JSON digests and exact delegation validation.

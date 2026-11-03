@@ -27,6 +27,7 @@ import App from "./app.js";
 import { OperatorApiAuthority, operatorEndpointDeclarations, markOperatorNotApplied } from "./operator-api-authority.js";
 import { OPERATOR_API_EXTENSION, OPERATOR_AUTH_SCHEME, OPERATOR_DELEGATION_CLAIM, OperatorApiError, type OperatorOperation } from "@uns-kit/core/runtime/operator-api.js";
 import { OperatorJwtVerifier } from "./operator-jwt.js";
+import { RuntimeRouteRegistration, runtimeRouteRegistrationEnvironment, type RuntimeRouteRegistrationEnvironment } from "./runtime-route-registration.js";
 import { UnsAsset } from "@uns-kit/core/uns/uns-asset.js";
 import { UnsObjectType, UnsObjectId } from "@uns-kit/core/uns/uns-object.js";
 import type {
@@ -94,6 +95,16 @@ export default class UnsApiProxy extends UnsProxy {
   private readonly dataCatalogOffers = new Map<string, Record<string, unknown>>();
   private readonly operatorAuthority: OperatorApiAuthority;
   private readonly operatorJwt: OperatorJwtVerifier;
+  private operatorRouteRegistration?: RuntimeRouteRegistration;
+
+  private registerOperatorRoute(environment: RuntimeRouteRegistrationEnvironment | undefined): void {
+    if (!environment || this.operatorRouteRegistration) return;
+    this.operatorRouteRegistration = new RuntimeRouteRegistration({ ...environment, processName: this.processName,
+      apiHost: this.getPublishedApiHost(), onState: ready => {
+        if (!ready) logger.warn("Managed operator route registration unavailable; operator commands remain protected");
+      } });
+    this.operatorRouteRegistration.start();
+  }
 
   constructor(processName: string, instanceName: string, options: IApiProxyOptions) {
     super();
@@ -257,6 +268,7 @@ export default class UnsApiProxy extends UnsProxy {
     const swaggerPath = buildSwaggerPath(this.swaggerBasePrefix, this.processName, this.instanceName);
     const operatorDeclarations = operatorEndpointDeclarations(options?.operatorOperations, "GET", fullPath,
       Boolean(this.options.jwks?.wellKnownJwksUrl || this.options.jwtSecret));
+    const routeEnvironment = operatorDeclarations.length ? runtimeRouteRegistrationEnvironment(process.env) : undefined;
     try {
       this.registerApiEndpoint({
         timestamp: time,
@@ -431,6 +443,7 @@ export default class UnsApiProxy extends UnsProxy {
       }
       if (operatorDeclarations.length && this.app.swaggerSpec?.paths?.[apiPath]?.get) {
         this.app.swaggerSpec.paths[apiPath].get[OPERATOR_API_EXTENSION] = operatorDeclarations;
+        this.registerOperatorRoute(routeEnvironment);
       }
     } catch (error) {
       logger.error(`${this.instanceNameWithSuffix} - Error publishing message to route ${fullPath}: ${error.message}`);
@@ -577,6 +590,7 @@ export default class UnsApiProxy extends UnsProxy {
     const methodKey = method.toLowerCase() as "post" | "put" | "patch" | "delete";
     const operatorDeclarations = operatorEndpointDeclarations(options?.operatorOperations, method, fullPath,
       Boolean(this.options.jwks?.wellKnownJwksUrl || this.options.jwtSecret));
+    const routeEnvironment = operatorDeclarations.length ? runtimeRouteRegistrationEnvironment(process.env) : undefined;
 
     try {
       this.registerApiEndpoint({
@@ -696,6 +710,7 @@ export default class UnsApiProxy extends UnsProxy {
       }
       if (operatorDeclarations.length && this.app.swaggerSpec?.paths?.[apiPath]?.[methodKey]) {
         this.app.swaggerSpec.paths[apiPath][methodKey][OPERATOR_API_EXTENSION] = operatorDeclarations;
+        this.registerOperatorRoute(routeEnvironment);
       }
     } catch (error) {
       logger.error(`${this.instanceNameWithSuffix} - Error registering ${method} route ${fullPath}: ${error.message}`);
@@ -922,6 +937,7 @@ export default class UnsApiProxy extends UnsProxy {
   }
 
   public async stop(): Promise<void> {
+    this.operatorRouteRegistration?.stop();
     if (this.statusInterval) {
       clearInterval(this.statusInterval);
       this.statusInterval = null;

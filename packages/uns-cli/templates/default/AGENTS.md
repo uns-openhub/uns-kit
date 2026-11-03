@@ -21,6 +21,7 @@ Pointers for AI/code-assist tools when working in this generated project.
 - `pnpm run sync-uns-metadata -- --controller-url ... --token ...` -> pulls topics/tags/assets from the controller and regenerates local TS helpers
 
 <!-- uns-kit:migrations:start -->
+- When crossing `<3.0.43` to `>=3.0.43`, declared operator APIs register their actual route through a reviewed Controller launch automatically. Preserve the exact launch version/owner, private route-token file and data scopes; do not add application-specific route publishers or broaden identity permissions. Standalone and ordinary endpoints remain unchanged. Read the 3.0.43 MIGRATIONS.md entry before changing launch configuration.
 - When crossing `<3.0.41` to `>=3.0.41`, typed null scalar clears require explicit publisher allowNullData and data.valueType string/number. Update readers first; opt-in peers have a distinct handover compatibility hash, ordinary peers remain unchanged. Never replace null with zero, empty text or a missing update.
 - When crossing `<3.0.40` to `>=3.0.40`, async MQTT consumers may opt into managedInput/setInputHandler and bounded RAM publishBackpressure. Review an initial cold upgrade for the changed input compatibility; await all work, preserve failed input and use one retryable SDK signal owner. Supporting hosts must use launch-bound cooperative stop; a legacy PM2 deadline can still force termination. Follow MIGRATIONS.md and the MQTT drain example.
 
