@@ -567,6 +567,10 @@ export interface ApiChatDefaults {
 }
 
 export interface IApiProxyOptions {
+  /** Fresh principal-status endpoint for operator operations. Controller-managed
+   * runtimes default to their configured controller origin. No bearer is exposed. */
+  operatorAuthorizationStatusUrl?: string;
+  operatorJwksUrl?: string;
   jwtSecret?: string;
   /**
    * Public origin advertised for generated API endpoint metadata.
@@ -596,6 +600,7 @@ export interface IApiProxyOptions {
 }
 
 export interface IGetEndpointOptions {
+  operatorOperations?: import("../runtime/operator-api.js").OperatorOperationDefinition[];
   apiDescription?: string;
   tags?: string[];
   queryParams?: QueryParamDef[];
@@ -609,6 +614,7 @@ export interface IGetEndpointOptions {
 }
 
 export interface IPostEndpointOptions {
+  operatorOperations?: import("../runtime/operator-api.js").OperatorOperationDefinition[];
   apiDescription?: string;
   tags?: string[];
   routeOnly?: boolean;

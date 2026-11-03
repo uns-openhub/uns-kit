@@ -1,3 +1,4 @@
+import { withServiceApiRequestBody } from "./service-api-request-body.js";
 import { Router, type Response } from "express";
 import { readFileSync } from "fs";
 import jwt from "jsonwebtoken";
@@ -23,6 +24,9 @@ import {
 import { DataSizeMeasurements, PhysicalMeasurements } from "@uns-kit/core/uns/uns-measurements.js";
 import { buildUnsRoutePath } from "@uns-kit/core/uns/uns-path.js";
 import App from "./app.js";
+import { OperatorApiAuthority, operatorEndpointDeclarations, markOperatorNotApplied } from "./operator-api-authority.js";
+import { OPERATOR_API_EXTENSION, OPERATOR_AUTH_SCHEME, OPERATOR_DELEGATION_CLAIM, OperatorApiError, type OperatorOperation } from "@uns-kit/core/runtime/operator-api.js";
+import { OperatorJwtVerifier } from "./operator-jwt.js";
 import { UnsAsset } from "@uns-kit/core/uns/uns-asset.js";
 import { UnsObjectType, UnsObjectId } from "@uns-kit/core/uns/uns-object.js";
 import type {
@@ -88,10 +92,19 @@ export default class UnsApiProxy extends UnsProxy {
   private statusInterval: NodeJS.Timeout | null = null;
   private readonly statusIntervalMs = 10_000;
   private readonly dataCatalogOffers = new Map<string, Record<string, unknown>>();
+  private readonly operatorAuthority: OperatorApiAuthority;
+  private readonly operatorJwt: OperatorJwtVerifier;
 
   constructor(processName: string, instanceName: string, options: IApiProxyOptions) {
     super();
     this.options = options;
+    const controllerBase = process.env.UNS_CONTROLLER_PUBLIC_BASE;
+    const statusUrl = options.operatorAuthorizationStatusUrl ?? (controllerBase ? new URL("/api/auth/token-status", controllerBase).href : undefined);
+    this.operatorJwt = new OperatorJwtVerifier(options.operatorJwksUrl ?? (controllerBase ? new URL("/api/auth/operator-jwks.json", controllerBase).href : undefined));
+    this.operatorAuthority = new OperatorApiAuthority({ ...(statusUrl ? { statusUrl } : {}), deployment: () => ({
+      controllerName: process.env.UNS_ROUTE_CONTROLLER_NAME!, rttNode: process.env.RTT_NODE!,
+      version: process.env.version ?? packageJson.version, instanceId: process.env.RTT_INSTANCE_ID!, launchId: process.env.UNS_ROUTE_LAUNCH_ID!,
+    }) });
     this.apiBasePrefix =
       normalizeBasePrefix(options.apiBasePath ?? process.env.UNS_API_BASE_PATH) || "/api";
     const rawSwaggerBase =
@@ -137,6 +150,24 @@ export default class UnsApiProxy extends UnsProxy {
 
   public getProcessName(): string {
     return this.processName;
+  }
+
+  private async operatorAuthorized(req: any, res: any, decoded: Record<string, unknown>, declarations: OperatorOperation[]): Promise<boolean> {
+    try {
+      const delegatedScheme = String(req.headers.authorization ?? "").startsWith(OPERATOR_AUTH_SCHEME + " ");
+      if (delegatedScheme !== (decoded[OPERATOR_DELEGATION_CLAIM] !== undefined)) throw new OperatorApiError("operator_jwt_purpose_mismatch", 403);
+      const normalizedAuthorization = delegatedScheme ? "Bearer " + req.headers.authorization.slice(OPERATOR_AUTH_SCHEME.length + 1) : req.headers.authorization;
+      await this.operatorAuthority.authorize({ claims: decoded, declarations, payload: req.method === "GET" ? {} : req.body,
+        authorization: normalizedAuthorization, query: req.query });
+      // Existing application handlers inspect an already-verified bearer.
+      req.headers.authorization = normalizedAuthorization;
+      return true;
+    } catch (error) {
+      const status = error instanceof OperatorApiError ? error.status : 503;
+      markOperatorNotApplied(res);
+      res.status(status).json({ error: error instanceof OperatorApiError ? error.code : "operator_authorization_unavailable" });
+      return false;
+    }
   }
 
   private getPublishedApiHost(): string {
@@ -224,7 +255,8 @@ export default class UnsApiProxy extends UnsProxy {
     const fullPath = buildUnsRoutePath(topic, asset, objectType, objectId, attribute);
     const apiPath = `${this.apiBasePrefix}${fullPath}`.replace(/\/{2,}/g, "/");
     const swaggerPath = buildSwaggerPath(this.swaggerBasePrefix, this.processName, this.instanceName);
-
+    const operatorDeclarations = operatorEndpointDeclarations(options?.operatorOperations, "GET", fullPath,
+      Boolean(this.options.jwks?.wellKnownJwksUrl || this.options.jwtSecret));
     try {
       this.registerApiEndpoint({
         timestamp: time,
@@ -288,9 +320,7 @@ export default class UnsApiProxy extends UnsProxy {
             const token = this.extractBearerToken(req, res);
             if (!token) return; // response already sent
 
-            const publicKey = await this.getPublicKeyFromJwks(token);
-            const algorithms = this.options.jwks.algorithms || ["RS256"];
-            const decoded: any = jwt.verify(token, publicKey, { algorithms });
+            const decoded: any = await this.verifyRequestToken(req, token);
 
             const accessRules: string[] | undefined = Array.isArray(decoded?.accessRules)
               ? decoded.accessRules
@@ -306,21 +336,19 @@ export default class UnsApiProxy extends UnsProxy {
               return res.status(403).json({ error: "Path not allowed by token access rules" });
             }
 
+            if (!await this.operatorAuthorized(req, res, decoded, operatorDeclarations)) return;
             handler(req, res);
           } catch (err: any) {
+            if (err instanceof OperatorApiError) { markOperatorNotApplied(res); return res.status(err.status).json({ error: err.code }); }
             return res.status(401).json({ error: "Invalid token" });
           }
         });
       } else if (this.options?.jwtSecret) {
-        this.app.router.get(fullPath, (req: any, res: any) => {
-          const authHeader = req.headers["authorization"];
-          if (!authHeader || !authHeader.startsWith("Bearer ")) {
-            return res.status(401).json({ error: "Missing or invalid Authorization header" });
-          }
-
-          const token = authHeader.slice(7);
+        this.app.router.get(fullPath, async (req: any, res: any) => {
+          const token = this.extractBearerToken(req, res);
+          if (!token) return;
           try {
-            const decoded: any = jwt.verify(token, process.env.JWT_SECRET || this.options.jwtSecret);
+            const decoded: any = await this.verifyRequestToken(req, token);
 
             const accessRules: string[] | undefined = Array.isArray(decoded?.accessRules)
               ? decoded.accessRules
@@ -336,8 +364,10 @@ export default class UnsApiProxy extends UnsProxy {
               return res.status(403).json({ error: "Path not allowed by token access rules" });
             }
 
+            if (!await this.operatorAuthorized(req, res, decoded, operatorDeclarations)) return;
             handler(req, res);
           } catch (err) {
+            if (err instanceof OperatorApiError) { markOperatorNotApplied(res); return res.status(err.status).json({ error: err.code }); }
             return res.status(401).json({ error: "Invalid token" });
           }
         });
@@ -398,6 +428,9 @@ export default class UnsApiProxy extends UnsProxy {
             },
           },
         };
+      }
+      if (operatorDeclarations.length && this.app.swaggerSpec?.paths?.[apiPath]?.get) {
+        this.app.swaggerSpec.paths[apiPath].get[OPERATOR_API_EXTENSION] = operatorDeclarations;
       }
     } catch (error) {
       logger.error(`${this.instanceNameWithSuffix} - Error publishing message to route ${fullPath}: ${error.message}`);
@@ -542,6 +575,8 @@ export default class UnsApiProxy extends UnsProxy {
     const apiPath = `${this.apiBasePrefix}${fullPath}`.replace(/\/{2,}/g, "/");
     const swaggerPath = buildSwaggerPath(this.swaggerBasePrefix, this.processName, this.instanceName);
     const methodKey = method.toLowerCase() as "post" | "put" | "patch" | "delete";
+    const operatorDeclarations = operatorEndpointDeclarations(options?.operatorOperations, method, fullPath,
+      Boolean(this.options.jwks?.wellKnownJwksUrl || this.options.jwtSecret));
 
     try {
       this.registerApiEndpoint({
@@ -557,8 +592,7 @@ export default class UnsApiProxy extends UnsProxy {
         apiMethod: method as any,
         apiQueryParams: [],
         apiDescription: options?.apiDescription,
-        serviceApi:
-          (options as { serviceApi?: Record<string, unknown> } | undefined)?.serviceApi ?? null,
+        serviceApi: withServiceApiRequestBody(options?.serviceApi, options?.requestBody),
         attributeType: UnsAttributeType.Api,
         apiSwaggerEndpoint: swaggerPath,
         asset,
@@ -577,9 +611,7 @@ export default class UnsApiProxy extends UnsProxy {
             const token = this.extractBearerToken(req, res);
             if (!token) return;
 
-            const publicKey = await this.getPublicKeyFromJwks(token);
-            const algorithms = this.options.jwks.algorithms || ["RS256"];
-            const decoded: any = jwt.verify(token, publicKey, { algorithms });
+            const decoded: any = await this.verifyRequestToken(req, token);
 
             const accessRules: string[] | undefined = Array.isArray(decoded?.accessRules)
               ? decoded.accessRules
@@ -595,21 +627,19 @@ export default class UnsApiProxy extends UnsProxy {
               return res.status(403).json({ error: "Path not allowed by token access rules" });
             }
 
+            if (!await this.operatorAuthorized(req, res, decoded, operatorDeclarations)) return;
             handler(req, res);
           } catch (_err: any) {
+            if (_err instanceof OperatorApiError) { markOperatorNotApplied(res); return res.status(_err.status).json({ error: _err.code }); }
             return res.status(401).json({ error: "Invalid token" });
           }
         });
       } else if (this.options?.jwtSecret) {
-        routerMethod(fullPath, (req: any, res: any) => {
-          const authHeader = req.headers["authorization"];
-          if (!authHeader || !authHeader.startsWith("Bearer ")) {
-            return res.status(401).json({ error: "Missing or invalid Authorization header" });
-          }
-
-          const token = authHeader.slice(7);
+        routerMethod(fullPath, async (req: any, res: any) => {
+          const token = this.extractBearerToken(req, res);
+          if (!token) return;
           try {
-            const decoded: any = jwt.verify(token, process.env.JWT_SECRET || this.options.jwtSecret);
+            const decoded: any = await this.verifyRequestToken(req, token);
 
             const accessRules: string[] | undefined = Array.isArray(decoded?.accessRules)
               ? decoded.accessRules
@@ -625,8 +655,10 @@ export default class UnsApiProxy extends UnsProxy {
               return res.status(403).json({ error: "Path not allowed by token access rules" });
             }
 
+            if (!await this.operatorAuthorized(req, res, decoded, operatorDeclarations)) return;
             handler(req, res);
           } catch (_err) {
+            if (_err instanceof OperatorApiError) { markOperatorNotApplied(res); return res.status(_err.status).json({ error: _err.code }); }
             return res.status(401).json({ error: "Invalid token" });
           }
         });
@@ -661,6 +693,9 @@ export default class UnsApiProxy extends UnsProxy {
             "403": { description: "Forbidden" },
           },
         };
+      }
+      if (operatorDeclarations.length && this.app.swaggerSpec?.paths?.[apiPath]?.[methodKey]) {
+        this.app.swaggerSpec.paths[apiPath][methodKey][OPERATOR_API_EXTENSION] = operatorDeclarations;
       }
     } catch (error) {
       logger.error(`${this.instanceNameWithSuffix} - Error registering ${method} route ${fullPath}: ${error.message}`);
@@ -800,13 +835,22 @@ export default class UnsApiProxy extends UnsProxy {
     }
   }
 
+  private async verifyRequestToken(req: any, token: string): Promise<Record<string, unknown>> {
+    if (String(req.headers.authorization ?? "").startsWith(OPERATOR_AUTH_SCHEME + " ")) return this.operatorJwt.verify(token);
+    if (this.options.jwks?.wellKnownJwksUrl) {
+      const key = await this.getPublicKeyFromJwks(token);
+      return jwt.verify(token, key, { algorithms: this.options.jwks.algorithms || ["RS256"] }) as Record<string, unknown>;
+    }
+    return jwt.verify(token, process.env.JWT_SECRET || this.options.jwtSecret!) as Record<string, unknown>;
+  }
+
   private extractBearerToken(req: any, res: any): string | undefined {
     const authHeader = req.headers["authorization"];
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (typeof authHeader !== "string" || !(authHeader.startsWith("Bearer ") || authHeader.startsWith(OPERATOR_AUTH_SCHEME + " "))) {
       res.status(401).json({ error: "Missing or invalid Authorization header" });
       return undefined;
     }
-    return authHeader.slice(7);
+    return authHeader.startsWith("Bearer ") ? authHeader.slice(7) : authHeader.slice(OPERATOR_AUTH_SCHEME.length + 1);
   }
 
   private async getPublicKeyFromJwks(token: string): Promise<string> {

@@ -9,6 +9,7 @@ import { basePath } from "@uns-kit/core/base-path.js";
 import logger from "@uns-kit/core/logger.js";
 import os from 'os';
 import { logRequestContext } from "./request-log.js";
+import { OPERATOR_OUTCOME_HEADER } from "@uns-kit/core/runtime/operator-api.js";
 
 type MountConfig = {
   apiBasePrefix?: string;
@@ -114,6 +115,7 @@ export default class App {
       if (!this.ownershipGate) return next();
       if (!this.ownershipGate()) {
         res.setHeader("Retry-After", "1");
+        res.setHeader(OPERATOR_OUTCOME_HEADER, "not-applied");
         res.status(503).json({ error: "RUNTIME_PASSIVE", message: "Runtime ownership is being transferred. Retry the request." });
         return;
       }

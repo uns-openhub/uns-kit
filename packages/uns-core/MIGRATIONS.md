@@ -9,6 +9,29 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.42 - Opt-in registered operator APIs and Service API body metadata
+
+Existing applications require no operator-API change when crossing this version.
+To expose a protected read or command to generic Controller orchestration, declare
+`operatorOperations` on the existing GET/POST registration. Use bounded request
+schemas and, for commands, a UUID request ID, write domain and application-owned
+durable idempotency receipt. See the shared
+[operator API contract](https://github.com/uns-openhub/uns-kit/blob/master/docs/operator-api.md)
+and [receipt example](https://github.com/uns-openhub/uns-kit/blob/master/docs/examples/operator-command-receipt.ts).
+
+Declarations grant no permissions. Delegated operations require current Controller
+ownership, explicit workload tools and a short-lived purpose-specific credential;
+the SDK checks current parent authorization before invoking the handler. Ordinary
+API bearer credentials remain separate. A missing Controller authority fails a
+delegated call closed without changing standalone drain/signal cleanup. Reconcile
+unknown command outcomes with the same actor/request ID and exact payload instead
+of issuing a new command. Never mark an uncertain effect as not applied.
+
+Shared POST/PUT/PATCH/DELETE registration also synchronizes Service API request-body
+metadata with an explicitly supplied OpenAPI body. Existing catalog schemas and
+examples are retained; the full JSON Schema remains in OpenAPI. No application
+handler or permission change is required for that metadata correction.
+
 ## 3.0.41 - Explicit typed null scalar clears
 
 Null publication is opt-in per MQTT publisher (`allowNullData: true`). A null
