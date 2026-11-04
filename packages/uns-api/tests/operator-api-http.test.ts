@@ -86,7 +86,9 @@ function delegated(operation: any, payload: unknown, change: Record<string, unkn
     { algorithm: "PS256", keyid: publicJwk.kid, header: { alg: "PS256", typ: OPERATOR_JWT_TYPE }, audience: OPERATOR_JWT_AUDIENCE },
   );
 }
-async function fixture(service = "fixture-a", action = "pause") {
+type JwksFault = "busy" | "reset" | "slow-headers" | "slow-body" | "outage";
+async function fixture(service = "fixture-a", action = "pause", jwksFault?: JwksFault) {
+  let jwksRequests = 0;
   const auth = await listen(
     createServer((req, res) => {
       res.setHeader("content-type", "application/json");
@@ -95,7 +97,30 @@ async function fixture(service = "fixture-a", action = "pause") {
         return;
       }
       if (req.url === "/operator-jwks") {
-        res.end(JSON.stringify({ keys: [{ ...publicJwk, alg: "PS256" }] }));
+        jwksRequests++;
+        const body = JSON.stringify({ keys: [{ ...publicJwk, alg: "PS256" }] });
+        if (jwksFault && (jwksRequests === 1 || jwksFault === "outage")) {
+          if (jwksFault === "busy" || jwksFault === "outage") {
+            res.writeHead(503).end("{}");
+            return;
+          }
+          if (jwksFault === "reset") {
+            req.socket.destroy();
+            return;
+          }
+          if (jwksFault === "slow-body") {
+            res.writeHead(200);
+            res.flushHeaders();
+          }
+          const timer = setTimeout(() => {
+            if (!res.destroyed) res.end(body);
+          }, 1_500);
+          resources.push(async () => {
+            clearTimeout(timer);
+          });
+          return;
+        }
+        res.end(body);
         return;
       }
       if (req.method !== "POST") {
@@ -161,7 +186,14 @@ async function fixture(service = "fixture-a", action = "pause") {
   });
   const publicPath = `/api/example/${service}/service/main/control`;
   const descriptors = proxy.app.swaggerSpec.paths[publicPath].post[OPERATOR_API_EXTENSION];
-  return { proxy, publicPath, descriptors, url: `http://127.0.0.1:${proxy.app.server.address().port}`, effects: () => effects };
+  return {
+    proxy,
+    publicPath,
+    descriptors,
+    url: `http://127.0.0.1:${proxy.app.server.address().port}`,
+    effects: () => effects,
+    jwksRequests: () => jwksRequests,
+  };
 }
 function post(f: Awaited<ReturnType<typeof fixture>>, payload: unknown, token?: string, path = f.publicPath, forcedScheme?: string) {
   return fetch(f.url + path, {
@@ -204,6 +236,57 @@ describe("actual SDK HTTP/JWKS operator endpoints", () => {
       expect(f.effects()).toBe(1);
     }
     expect(statusChecks).toBe(2);
+  });
+  it.each(["busy", "reset", "slow-headers", "slow-body"] as const)(
+    "recovers real JWKS %s before dispatch, without retrying the command",
+    async (fault) => {
+      const f = await fixture("fixture-a", "pause", fault);
+      const body = { action: "pause", requestId: randomUUID() };
+      const response = await post(f, body, delegated(f.descriptors[1], body));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ effects: 1 });
+      expect(f.jwksRequests()).toBe(2);
+      expect(statusChecks).toBe(1);
+      expect(f.effects()).toBe(1);
+    },
+  );
+  it("uses the same recovery for unrelated applications and still checks revocation on cached keys", async () => {
+    for (const [service, action] of [
+      ["fixture-a", "pause"],
+      ["different-service", "hold"],
+    ]) {
+      active = true;
+      const f = await fixture(service, action, "busy");
+      const body = { action, requestId: randomUUID() };
+      const token = delegated(f.descriptors[1], body);
+      expect((await post(f, body, token)).status).toBe(200);
+      active = false;
+      expect((await post(f, body, token)).status).toBe(403);
+      expect(f.effects()).toBe(1);
+      expect(f.jwksRequests()).toBe(2);
+    }
+    expect(statusChecks).toBe(4);
+  });
+  it("does not use a recovered key as authority for a revoked parent", async () => {
+    const f = await fixture("fixture-a", "pause", "busy");
+    const body = { action: "pause", requestId: randomUUID() };
+    active = false;
+    expect((await post(f, body, delegated(f.descriptors[1], body))).status).toBe(403);
+    expect(f.jwksRequests()).toBe(2);
+    expect(statusChecks).toBe(1);
+    expect(f.effects()).toBe(0);
+  });
+  it("returns a bounded 503 on persistent JWKS outage without running a handler", async () => {
+    const f = await fixture("fixture-a", "pause", "outage");
+    const body = { action: "pause", requestId: randomUUID() };
+    const token = delegated(f.descriptors[1], body);
+    const response = await post(f, body, token);
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "operator_jwks_unavailable" });
+    expect((await post(f, body, token)).status).toBe(503);
+    expect(f.jwksRequests()).toBe(2);
+    expect(statusChecks).toBe(0);
+    expect(f.effects()).toBe(0);
   });
   it("prevents a read delegation from invoking a command at the same POST endpoint", async () => {
     const f = await fixture();

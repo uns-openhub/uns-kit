@@ -43,6 +43,8 @@ jobs:
       - run: pnpm run ts:version:check
       - run: pnpm run ts:build
       - run: pnpm run ts:pack:check
+      - name: Verify declared operator authority and bounded JWKS recovery
+        run: pnpm exec vitest run packages/uns-api/tests --maxWorkers=1 --no-file-parallelism --silent
       - run: pnpm exec vitest run tests/api-package-boundary.test.ts tests/api-ownership-drain.test.ts tests/api-read-only-drain.test.ts
       - run: pnpm exec vitest run tests/uns-cli-upgrade.test.ts tests/uns-cli-bundle-create.test.ts
       - run: pnpm exec vitest run tests/runtime/process-group-contract.test.ts tests/process-group-upgrade.test.ts tests/process-group-direct.test.ts tests/runtime/process-group-usage.test.ts

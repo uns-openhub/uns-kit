@@ -9,6 +9,24 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.44 - Bounded operator JWKS recovery
+
+When crossing `<3.0.44` to `>=3.0.44`, ordinary application handlers, standalone
+shutdown and existing input/output journals need no migration. Applications using
+declared operator endpoints receive this correction from `@uns-kit/api`; consume
+the reviewed published API/core versions together with a frozen dependency lock.
+No application-specific retry wrapper, configuration flag or new Controller
+capability is needed.
+
+The shared verifier coalesces key refreshes and retries a transient public-key GET
+once within a bounded deadline. It does not retry an operator request or business
+effect, extend the original key-cache lifetime, or skip parent revocation checks.
+Persistent key-source failure remains a503 and a revoked parent remains denied.
+Keep existing service permissions, launch identity, keys, queues, pause policies
+and durable command receipts; never resume a paused target or broaden scopes to
+make an upgrade pass. Follow the normal reviewed upgrade procedure after npm
+publication. See the [operator contract and regression examples](../../docs/operator-api.md#bounded-jwks-recovery-3044).
+
 ## 3.0.43 - Shared managed operator route registration
 
 This entry describes the prepared 3.0.43 release; npm publication is separate. Existing ordinary

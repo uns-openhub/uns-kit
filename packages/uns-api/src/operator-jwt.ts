@@ -2,12 +2,26 @@ import { OPERATOR_JWT_ALGORITHM, OPERATOR_JWT_AUDIENCE, OPERATOR_JWT_TYPE, Opera
 import jwt from "jsonwebtoken";
 import { createPublicKey } from "node:crypto";
 
+const CACHE_TTL_MS = 15_000;
+const FETCH_TIMEOUT_MS = 1_000;
+const FAILURE_COOLDOWN_MS = 1_000;
+const MAX_DOCUMENT_BYTES = 131_072;
+const MAX_FETCH_ATTEMPTS = 2;
+
+class JwksFetchFailure extends Error {
+  constructor(readonly retryable: boolean) {
+    super("Operator key fetch failed");
+  }
+}
+
 /** Purpose-specific JWKS uses existing approved service public keys. PS256/type/
  * audience keep these tokens out of the normal RS256 API/GraphQL credential path. */
 export class OperatorJwtVerifier {
   private keys: Array<Record<string, unknown>> = [];
   private expires = 0;
   private pending: Promise<void> | undefined;
+  private retryAt = 0;
+  private transportActive = false;
   constructor(
     private readonly url?: string,
     private readonly fetcher: typeof fetch = fetch,
@@ -35,47 +49,109 @@ export class OperatorJwtVerifier {
       throw new OperatorApiError("operator_jwt_invalid", 401);
     }
   }
-  private async load(): Promise<void> {
-    this.pending ??= (async () => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 1000);
-      try {
-        const response = await this.fetcher(this.url!, { redirect: "error", signal: controller.signal });
-        if (!response.ok || !response.body || Number(response.headers.get("content-length") ?? 0) > 131072) throw new Error("unavailable");
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let size = 0,
-          body = "";
+  private load(): Promise<void> {
+    if (this.pending) return this.pending;
+    if (Date.now() < this.retryAt) return Promise.reject(new OperatorApiError("operator_jwks_unavailable", 503));
+    this.pending = (async () => {
+      for (let attempt = 0; attempt < MAX_FETCH_ATTEMPTS; attempt++) {
         try {
-          while (true) {
-            const part = await reader.read();
-            if (part.done) break;
-            size += part.value.byteLength;
-            if (size > 131072) {
-              await reader.cancel();
-              throw new Error("oversize");
-            }
-            body += decoder.decode(part.value, { stream: true });
-          }
-          body += decoder.decode();
-        } finally {
-          reader.releaseLock();
+          const keys = await this.fetchKeys();
+          // Replace trust only with a complete successful response. Failure may
+          // retain a still-fresh snapshot, but never extends its 15-second TTL.
+          this.keys = keys;
+          this.expires = Date.now() + CACHE_TTL_MS;
+          this.retryAt = 0;
+          return;
+        } catch (error) {
+          if (!(error instanceof JwksFetchFailure) || !error.retryable || attempt + 1 === MAX_FETCH_ATTEMPTS) break;
+          // Retry only the public-key GET, never the operator request or effect.
+          // All concurrent verifications share this same bounded recovery.
+          await new Promise((resolve) => setTimeout(resolve, 100 + Math.floor(Math.random() * 100)));
         }
-        const document = JSON.parse(body);
-        if (!Array.isArray(document.keys) || document.keys.length > 64) throw new Error("invalid");
-        this.keys = document.keys;
-        this.expires = Date.now() + 15000;
-      } catch {
-        this.keys = [];
-        this.expires = 0;
-        throw new OperatorApiError("operator_jwks_unavailable", 503);
-      } finally {
-        controller.abort();
-        clearTimeout(timer);
       }
+      this.retryAt = Date.now() + FAILURE_COOLDOWN_MS;
+      throw new OperatorApiError("operator_jwks_unavailable", 503);
     })().finally(() => {
       this.pending = undefined;
     });
     return this.pending;
+  }
+
+  private async fetchKeys(): Promise<Array<Record<string, unknown>>> {
+    // A transport ignoring abort must not accumulate parallel replacement
+    // requests or install a late response after the caller's deadline.
+    if (this.transportActive) throw new JwksFetchFailure(false);
+    this.transportActive = true;
+    const controller = new AbortController();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let expired = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        expired = true;
+        controller.abort();
+        void reader?.cancel().catch(() => {});
+        reject(new JwksFetchFailure(true));
+      }, FETCH_TIMEOUT_MS);
+    });
+    const work = (async () => {
+      try {
+        const response = await this.fetcher(this.url!, { redirect: "error", signal: controller.signal });
+        if (expired || !response.ok || !response.body || Number(response.headers.get("content-length") ?? 0) > MAX_DOCUMENT_BYTES) {
+          void response.body?.cancel().catch(() => {});
+          throw new JwksFetchFailure(!expired && (response.status === 408 || response.status === 429 || response.status >= 500));
+        }
+        reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let size = 0,
+          body = "";
+        while (true) {
+          const part = await reader.read();
+          if (expired) throw new JwksFetchFailure(false);
+          if (part.done) break;
+          size += part.value.byteLength;
+          if (size > MAX_DOCUMENT_BYTES) {
+            void reader.cancel().catch(() => {});
+            throw new JwksFetchFailure(false);
+          }
+          body += decoder.decode(part.value, { stream: true });
+        }
+        body += decoder.decode();
+        let document: unknown;
+        try {
+          document = JSON.parse(body);
+        } catch {
+          throw new JwksFetchFailure(false);
+        }
+        if (
+          !document ||
+          typeof document !== "object" ||
+          !("keys" in document) ||
+          !Array.isArray(document.keys) ||
+          document.keys.length > 64 ||
+          document.keys.some((k) => !k || typeof k !== "object" || Array.isArray(k))
+        )
+          throw new JwksFetchFailure(false);
+        return document.keys as Array<Record<string, unknown>>;
+      } catch (error) {
+        if (error instanceof JwksFetchFailure) throw error;
+        throw new JwksFetchFailure(true);
+      }
+    })();
+    const settled = () => {
+      this.transportActive = false;
+      try {
+        reader?.releaseLock();
+      } catch {
+        /* An aborted stream may still be settling. */
+      }
+    };
+    void work.then(settled, settled);
+    try {
+      return await Promise.race([work, timeout]);
+    } finally {
+      clearTimeout(timer!);
+      controller.abort();
+    }
   }
 }

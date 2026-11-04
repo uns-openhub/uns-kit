@@ -1,8 +1,9 @@
 # Opt-in operator API contract
 
-The operator declaration/delegation contract was published in 3.0.42. Shared
-managed-route registration is prepared in 3.0.43 and requires npm publication
-and downstream dependency updates before deployment.
+The operator declaration/delegation contract was introduced in 3.0.42 and shared
+managed-route registration in 3.0.43. This source prepares bounded JWKS recovery
+in 3.0.44. npm publication and downstream dependency updates are separate from
+source preparation and are required before deployment.
 Ordinary endpoints do not become operator operations automatically.
 
 ## Managed route registration (3.0.43)
@@ -56,16 +57,24 @@ options and publishes them in the OpenAPI `x-uns-operator-operations` extension.
 ```ts
 const operatorOperations = [
   {
-    protocol: 1, id: "maintenance.preview", title: "Preview maintenance",
+    protocol: 1,
+    id: "maintenance.preview",
+    title: "Preview maintenance",
     kind: "read",
     requestSchema: {
-      type: "object", properties: { action: { type: "string", const: "preview" } },
-      required: ["action"], additionalProperties: false,
+      type: "object",
+      properties: { action: { type: "string", const: "preview" } },
+      required: ["action"],
+      additionalProperties: false,
     },
   },
   {
-    protocol: 1, id: "maintenance.apply", title: "Apply maintenance",
-    kind: "command", writeDomain: "maintenance-policy", replay: "request-id-v1",
+    protocol: 1,
+    id: "maintenance.apply",
+    title: "Apply maintenance",
+    kind: "command",
+    writeDomain: "maintenance-policy",
+    replay: "request-id-v1",
     requestSchema: {
       type: "object",
       properties: {
@@ -73,7 +82,8 @@ const operatorOperations = [
         requestId: { type: "string", format: "uuid" },
         expectedRevision: { type: "integer", minimum: 0 },
       },
-      required: ["action", "requestId", "expectedRevision"], additionalProperties: false,
+      required: ["action", "requestId", "expectedRevision"],
+      additionalProperties: false,
     },
   },
 ] satisfies import("@uns-kit/core/runtime/operator-api.js").OperatorOperationDefinition[];
@@ -100,6 +110,45 @@ processes derive the public JWKS/status endpoints from `UNS_CONTROLLER_PUBLIC_BA
 standalone tests may set `operatorJwksUrl` and `operatorAuthorizationStatusUrl`.
 Delegated calls always require online parent status, even in standalone mode.
 Do not forward, return or log credentials or accept a client-selected authority URL.
+
+## Bounded JWKS recovery (3.0.44)
+
+The shared `OperatorJwtVerifier` recovers transient failures while fetching public
+operator keys. This requires no application-specific code, configuration change,
+new Controller endpoint, permission or declaration version. It applies to every
+application using the SDK's declared operator endpoints. Ordinary bearer-token
+verification and application data/queue processing are unchanged.
+
+Concurrent cache misses share one refresh, including its recovery attempt. A
+refresh performs at most two GETs to the same configured JWKS URL, with a one-second
+deadline per attempt and 100–199 ms jitter before the single retry. Connection
+failures, interrupted bodies, HTTP 408/429 and 5xx can recover this way. Rejected,
+malformed or oversized key documents fail closed without a retry. Failed refreshes
+have a one-second cooldown to prevent each waiting client from starting a new
+request. Redirects are refused and credentials are never sent with these GETs.
+
+The 15-second key-cache freshness limit is unchanged. A failed refresh never
+extends it and expired keys cannot authorize a request during an outage. A failed
+unknown-key lookup does not discard a different key whose original cache lifetime
+has not expired. An authoritative successful response replaces the key set,
+including an empty response that removes all keys. A transport ignoring abort stays
+the only active transport until it settles; callers remain bounded and its late
+response cannot install trust.
+
+Only public-key retrieval is retried. The SDK does not replay an operator POST or
+business effect. Signature, PS256, JWT type, audience, expiry, request/launch binding
+and the fresh parent-authorization check still apply after recovery. Revocation
+returns 403; persistent key-source failure returns `503 operator_jwks_unavailable`
+before the application handler runs. This behavior does not introduce offline
+operator authority or change durable receipt/reconciliation requirements.
+
+Local regression coverage is in `packages/uns-api/tests/operator-jwt.test.ts` and
+`operator-api-http.test.ts`. The latter uses real synthetic HTTP endpoints for two
+unrelated applications, including delayed headers/bodies, connection reset, one
+handler invocation, revoked parent access and a persistent outage. Preparing this
+source release does not establish npm publication or deployment; downstream
+consumers must use the separately reviewed published 3.0.44 SDK release before
+receiving the fix. See the [version-bounded upgrade guidance](../packages/uns-core/MIGRATIONS.md#3044---bounded-operator-jwks-recovery).
 
 The Controller can orchestrate/review a command; **the application owns its effect
 and durable replay receipt**. Store actor, request ID, request digest and result in

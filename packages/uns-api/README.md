@@ -14,13 +14,19 @@ For the MQTT topic registry published by the API plugin, see `../../docs/uns-top
 | [`@uns-kit/cron`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cron) | Cron-driven scheduler that emits UNS events on a fixed cadence.             |
 | [`@uns-kit/cli`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cli)   | CLI for scaffolding new UNS applications.                                   |
 
-## Declared operator operations (local source candidate)
+## Declared operator operations (3.0.42+)
 
 See the shared [operator API contract and example](../../docs/operator-api.md).
 An application explicitly declares its read/command operations; the SDK enforces
 current authority and exact launch/body binding. Application business checks and
 durable command receipts remain application-owned. Legacy endpoints gain no
 operator grant automatically.
+
+The [bounded JWKS recovery in 3.0.44](../../docs/operator-api.md#bounded-jwks-recovery-3044)
+handles a transient public-key retrieval failure inside the original authorization
+attempt. It retries only the key GET, preserves the existing trust deadline and
+parent-revocation checks, and does not replay application commands. No per-service
+configuration is needed; npm publication and downstream updates are separate steps.
 
 ## Installation
 
