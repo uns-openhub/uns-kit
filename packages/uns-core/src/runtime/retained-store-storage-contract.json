@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "maximumStores": 32,
+  "maximumEntries": 100000,
+  "maximumBytes": 68719476736,
+  "maximumManifestBytes": 33554432,
+  "maximumFileBytes": 34359738368,
+  "maximumDepth": 32
+}

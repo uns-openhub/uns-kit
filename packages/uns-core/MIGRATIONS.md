@@ -9,6 +9,25 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.45 - Opt-in retained-store storage protocol
+
+When crossing `<3.0.45` to `>=3.0.45`, ordinary applications keep their current
+behavior. Applications adopting bound
+retained stores must declare `storageProtocol: 1`, resolve only the shared resource
+paths, acquire `openRetainedStoreLease(binding)` before opening payload writers,
+and release it only after final writer cleanup. Do not infer support from a Kit
+version or default an old omitted capability to supported. Classify manifest
+resources explicitly as backup payload or metadata when needed.
+
+Read the [bundled guide](dist/runtime/retained-store-guide.md) and the two
+unrelated manifests in `dist/runtime/retained-store-examples/`. The source guide
+is `docs/retained-store-adoption.md` in the SDK repository.
+Managed use requires the Runtime's external retained-store root. Older local
+candidate bindings/layouts need reviewed initialization/relocation; the SDK never
+silently changes their absolute roots or converts application data. Snapshot
+requires stopped owners. Preserve original volumes and handle unknown outcomes
+through the same operation ID before restarting any owner.
+
 ## 3.0.44 - Bounded operator JWKS recovery
 
 When crossing `<3.0.44` to `>=3.0.44`, ordinary application handlers, standalone

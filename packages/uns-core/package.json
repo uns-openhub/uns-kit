@@ -1,6 +1,6 @@
 {
   "name": "@uns-kit/core",
-  "version": "3.0.44",
+  "version": "3.0.45",
   "description": "Core utilities and runtime building blocks for UNS-based realtime transformers.",
   "type": "module",
   "license": "MIT",
@@ -23,6 +23,15 @@
     "MIGRATIONS.md"
   ],
   "exports": {
+    "./runtime/retained-store.js": {
+      "types": "./dist/runtime/retained-store.d.ts",
+      "import": "./dist/runtime/retained-store.js"
+    },
+    "./runtime/retained-store-storage.mjs": {
+      "types": "./dist/runtime/retained-store-storage.d.mts",
+      "import": "./dist/runtime/retained-store-storage.mjs"
+    },
+    "./runtime/retained-store-storage-contract.json": "./dist/runtime/retained-store-storage-contract.json",
     "./*": "./dist/*",
     ".": {
       "types": "./dist/index.d.ts",

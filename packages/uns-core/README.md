@@ -29,6 +29,20 @@ npm install @uns-kit/core
 - **MQTT helpers** — resilient publishers, topic builders, throttled queues, and handover support.
 - **gRPC gateway** — infrastructure to bridge Python workers into the UNS message fabric.
 
+## Optional retained stores (3.0.45)
+
+Applications can explicitly declare stable opaque resources for reviewed
+same-host adoption, offline backup and recovery. Import the shared contract from
+`@uns-kit/core/runtime/retained-store.js`; hold its store lease before opening
+payload writers. Ordinary applications retain their existing behavior.
+
+Read the [bundled guide](dist/runtime/retained-store-guide.md) and manifests in
+`dist/runtime/retained-store-examples/`, or the
+[source guide](https://github.com/uns-openhub/uns-kit/blob/master/docs/retained-store-adoption.md).
+Runtime mounts, Controller orchestration and helper releases must also support
+the declared capability. The SDK version alone grants no permissions and does
+not move data, enable queues or change the handover protocol.
+
 ## Basic usage
 
 ```ts

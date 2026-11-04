@@ -52,6 +52,9 @@ For ordinary MQTT services, see [clean migration drain and explicitly disabled
 output persistence](docs/mqtt-migration-drain.md).
 For optional typed scalar clears in 3.0.41, see the
 [reader-first upgrade contract and example](docs/mqtt-null-data.md).
+For opt-in retained stores in 3.0.45, see the
+[shared adoption, offline backup and recovery guide](docs/retained-store-adoption.md)
+and its two unrelated application manifests in `examples/retained-store/`.
 SDK npm publication, compatible host/helper releases and deployment are separate.
 For the active cross-repository migration of MQTT table columns from arrays to
 named objects, see

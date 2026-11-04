@@ -1,0 +1,22 @@
+{
+  "protocol": 1,
+  "format": "measurement-journal-v1",
+  "resources": [
+    {
+      "id": "queue",
+      "path": "pending-events",
+      "kind": "directory",
+      "required": true,
+      "backup": "payload"
+    },
+    {
+      "id": "policy",
+      "path": "destination-policy.json",
+      "kind": "file",
+      "required": false,
+      "backup": "metadata"
+    }
+  ],
+  "legacyVersions": ["1.0.0"],
+  "storageProtocol": 1
+}

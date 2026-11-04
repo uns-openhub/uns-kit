@@ -1,0 +1,22 @@
+{
+  "protocol": 1,
+  "format": "text-index-v1",
+  "resources": [
+    {
+      "id": "queue",
+      "path": "index-data",
+      "kind": "directory",
+      "required": true,
+      "backup": "payload"
+    },
+    {
+      "id": "replay",
+      "path": "maintenance.json",
+      "kind": "file",
+      "required": false,
+      "backup": "metadata"
+    }
+  ],
+  "legacyVersions": [],
+  "storageProtocol": 1
+}
