@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 export const RESTORE_FILE = "retained-store-restore.json";
+export const RESTORE_MANIFEST = "retained-store-restore-manifest.json";
 export const DECLARATION = "store-resources.json";
 export const OPERATION = "store-operation.json";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -21,7 +22,7 @@ export function safePath(p) {
   if (!path.isAbsolute(p) || path.normalize(p) !== p) throw Error("Unsafe retained path");
   for (let a = p; a !== path.dirname(a); a = path.dirname(a)) if (entry(a)?.isSymbolicLink()) throw Error("Linked retained path");
 }
-function owned(p, directory = false) {
+export function owned(p, directory = false) {
   safePath(p);
   const s = entry(p);
   if (!s || s.uid !== process.getuid?.() || s.isSymbolicLink() || (directory ? !s.isDirectory() : !s.isFile() || s.nlink !== 1))
@@ -38,7 +39,7 @@ export function readJSON(p, limit = 131072) {
   if (s.size > limit) throw Error("Retained metadata limit");
   return JSON.parse(fs.readFileSync(p, "utf8"));
 }
-function sync(p) {
+export function sync(p) {
   const fd = fs.openSync(p, "r");
   try {
     fs.fsyncSync(fd);
@@ -147,7 +148,7 @@ export function runtimeLease(binding) {
     throw e;
   }
 }
-function sha(file) {
+export function sha(file) {
   const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   const h = createHash("sha256"),
     buffer = Buffer.alloc(65536);
@@ -159,7 +160,7 @@ function sha(file) {
     fs.closeSync(fd);
   }
 }
-function relative(p) {
+export function relative(p) {
   return (
     typeof p === "string" &&
     p.length <= 4096 &&
@@ -212,7 +213,7 @@ function declaration(value, format) {
   }
   return value;
 }
-function checkLimit(limits) {
+export function checkLimit(limits) {
   if (
     limits.schemaVersion !== 1 ||
     limits.maximumStores !== 32 ||
@@ -258,7 +259,7 @@ export function captureRetained(root, destination, mode, limits) {
     }
     const names = fs.readdirSync(root).sort();
     for (const id of names) {
-      if (["retained-root-lease.sqlite", RESTORE_FILE].includes(id)) continue;
+      if (["retained-root-lease.sqlite", RESTORE_FILE,RESTORE_MANIFEST].includes(id)) continue;
       if (!uuid.test(id) || manifest.stores.length >= limits.maximumStores) throw Error("Unexpected retained root entry");
       const dir = path.join(root, id);
       privateRoot(dir);
@@ -267,30 +268,25 @@ export function captureRetained(root, destination, mode, limits) {
       if (entry(path.join(dir, OPERATION))) throw Error("Retained operation is incomplete");
       const b = binding(readJSON(path.join(dir, "store.json")), root, id);
       const d = declaration(readJSON(path.join(dir, DECLARATION)), b.format);
-      if (entry(path.join(dir, "store-returned.json"))) {
-        if (fs.readdirSync(dir).some((n) => !["store.json", DECLARATION, "store-lease.sqlite", "store-returned.json"].includes(n)))
-          throw Error("Undeclared returned-store entry");
+      const retired = !!entry(path.join(dir, "store-returned.json"));
+      if (retired) {
         const r = readJSON(path.join(dir, "store-returned.json"));
-        if (r.operationId !== b.operationId || r.generation !== b.generation || d.resources.some((x) => entry(path.join(dir, x.id))))
+        if (r.operationId !== b.operationId || r.generation !== b.generation)
           throw Error("Uncertain returned store");
-        fs.mkdirSync(path.join(destination, id), { mode: 0o700 });
-        manifest.entries.push({ path: id, type: "directory" });
-        for (const name of ["store.json", DECLARATION, "store-returned.json"]) copy(path.join(dir, name), id + "/" + name);
-        manifest.stores.push({ binding: b, storeId: id, generation: b.generation, owner: b.owner, format: b.format, resources: [], retired: true });
-        continue;
       }
-      const allowed = new Set(["store.json", DECLARATION, "store-lease.sqlite", ...d.resources.map((x) => x.id)]);
+      const allowed = new Set(["store.json", DECLARATION, "store-lease.sqlite", ...(retired?["store-returned.json"]:[]), ...d.resources.map((x) => x.id)]);
       if (fs.readdirSync(dir).some((n) => !allowed.has(n))) throw Error("Undeclared retained entry");
       fs.mkdirSync(path.join(destination, id), { mode: 0o700 });
       manifest.entries.push({ path: id, type: "directory" });
       copy(path.join(dir, "store.json"), id + "/store.json");
       copy(path.join(dir, DECLARATION), id + "/" + DECLARATION);
+      if(retired)copy(path.join(dir,"store-returned.json"),id+"/store-returned.json");
       const resources = [];
       for (const r of d.resources) {
         const p = path.join(dir, r.id),
           s = entry(p);
         if (!s) {
-          if (r.required) throw Error("Required retained resource missing");
+          if (r.required && !retired) throw Error("Required retained resource missing");
           continue;
         }
         if ((r.kind === "directory") !== s.isDirectory()) throw Error("Retained resource kind mismatch");
@@ -298,7 +294,7 @@ export function captureRetained(root, destination, mode, limits) {
         resources.push({ id: r.id, backup: r.backup ?? "payload", included });
         if (included) copy(p, id + "/" + r.id);
       }
-      manifest.stores.push({ binding: b, storeId: id, generation: b.generation, owner: b.owner, format: b.format, resources });
+      manifest.stores.push({ binding: b, storeId: id, generation: b.generation, owner: b.owner, format: b.format, resources, ...(retired?{retired:true}:{}) });
     }
     const raw = JSON.stringify(manifest);
     if (Buffer.byteLength(raw) > limits.maximumManifestBytes) throw Error("Retained manifest limit");
@@ -363,7 +359,7 @@ function verifySnapshot(source, limits) {
   if (stores.size !== m.stores.length || m.entries.some((e) => !stores.has(e.path.split("/")[0]))) throw Error("Undeclared snapshot store");
   for (const st of m.stores) {
     const b = binding(readJSON(path.join(source, st.storeId, "store.json")), m.sourceRoot, st.storeId);
-    declaration(readJSON(path.join(source, st.storeId, DECLARATION)), b.format);
+    const declared=declaration(readJSON(path.join(source, st.storeId, DECLARATION)), b.format);
     if (st.retired) {
       const r = readJSON(path.join(source, st.storeId, "store-returned.json"));
       if (
@@ -371,7 +367,7 @@ function verifySnapshot(source, limits) {
         r.generation !== b.generation ||
         m.entries.some(
           (e) =>
-            e.path.startsWith(st.storeId + "/") && !["store.json", DECLARATION, "store-returned.json"].includes(e.path.slice(st.storeId.length + 1)),
+            e.path.startsWith(st.storeId + "/") && !["store.json", DECLARATION, "store-returned.json",...declared.resources.map(r=>r.id)].includes(e.path.slice(st.storeId.length + 1).split("/")[0]),
         )
       )
         throw Error("Invalid retired-store receipt");
@@ -397,6 +393,7 @@ export function restoreRetained(source, root, backupDigest, limits, afterPublish
     if (new Set(ids).size !== ids.length || ids.some((id) => !uuid.test(id))) throw Error("Invalid snapshot store identities");
     if (marker?.state === "complete") {
       for (const id of ids) binding(readJSON(path.join(root, id, "store.json")), root, id);
+      persistRecoveryManifest(source,root,manifestDigest);
       return { state: "complete", stores: ids.length };
     }
     if (!marker) {
@@ -404,10 +401,11 @@ export function restoreRetained(source, root, backupDigest, limits, afterPublish
       marker = { protocol: 1, state: "applying", backupDigest, manifestDigest };
       atomicJSON(markerFile, marker);
     }
+    persistRecoveryManifest(source,root,manifestDigest);
     const stage = path.join(root, "retained-restore-stage");
     if (!entry(stage)) fs.mkdirSync(stage, { mode: 0o700 });
     privateRoot(stage);
-    const allowed = new Set(["retained-root-lease.sqlite", RESTORE_FILE, "retained-restore-stage", ...ids]);
+    const allowed = new Set(["retained-root-lease.sqlite", RESTORE_FILE,RESTORE_MANIFEST, "retained-restore-stage", ...ids]);
     if (fs.readdirSync(root).some((n) => !allowed.has(n))) throw Error("Unexpected restore target entry");
     for (const e of m.entries) {
       const id = e.path.split("/")[0],
@@ -486,8 +484,55 @@ export function retainedStorageMain() {
       ? captureRetained(root, out, modeOrDigest, limits)
       : action === "restore"
         ? restoreRetained(root, out, modeOrDigest, limits)
+        : action === "verify-restored"
+          ? verifyRestoredRetained(root,out,modeOrDigest,limits)
+          : action === "verify-root"
+            ? verifyRetainedRecoveryRoot(root,modeOrDigest,out,limits)
         : (() => {
             throw Error("Unknown retained operation");
           })();
   process.stdout.write(JSON.stringify(result));
+}
+
+/** Offline proof tied to one verified backup, used before an RTT tree can activate. */
+export function verifyRestoredRetained(source,root,backupDigest,limits){
+  checkLimit(limits);
+  const m=verifySnapshot(source,limits);
+  if(m.mode!=="include"||m.sourceRoot!==root||!hash.test(backupDigest))throw Error("Retained recovery scope differs");
+  return verifyRetainedRecoveryRoot(root,backupDigest,sha(path.join(source,"manifest.json")),limits);
+}
+function persistRecoveryManifest(source,root,digest){
+  const target=path.join(root,RESTORE_MANIFEST);
+  const temporary=target+".part";
+  if(entry(temporary)){owned(temporary);fs.unlinkSync(temporary);sync(root);}
+  if(entry(target)){if(sha(target)!==digest)throw Error("Retained recovery manifest differs");return;}
+  try{fs.copyFileSync(path.join(source,"manifest.json"),temporary,fs.constants.COPYFILE_EXCL);fs.chmodSync(temporary,0o600);sync(temporary);if(sha(temporary)!==digest)throw Error("Retained recovery manifest changed");fs.renameSync(temporary,target);sync(root);}finally{if(entry(temporary))fs.unlinkSync(temporary);}
+}
+export function verifyRetainedRecoveryRoot(root,backupDigest,digest,limits){
+  checkLimit(limits);
+  if(!hash.test(backupDigest)||!hash.test(digest))throw Error("Invalid retained recovery proof");
+  const release=rootLease(root,true,true);
+  try{
+    const marker=readJSON(path.join(root,RESTORE_FILE));
+    if(marker.state!=="complete"||marker.backupDigest!==backupDigest||marker.manifestDigest!==digest)throw Error("Matching completed retained recovery is required");
+    const file=path.join(root,RESTORE_MANIFEST);
+    if(sha(file)!==digest)throw Error("Retained recovery manifest differs");
+    const m=readJSON(file,limits.maximumManifestBytes);
+    if(m.schemaVersion!==1||m.kind!=="uns-retained-store-snapshot"||m.mode!=="include"||m.sourceRoot!==root||!Array.isArray(m.stores)||m.stores.length>limits.maximumStores||!Array.isArray(m.entries)||m.entries.length>limits.maximumEntries)throw Error("Invalid retained recovery manifest");
+    const ids=m.stores.map(s=>s.storeId);
+    if(new Set(ids).size!==ids.length||ids.some(id=>!uuid.test(id)))throw Error("Invalid recovered stores");
+    if(fs.readdirSync(root).some(n=>!["retained-root-lease.sqlite",RESTORE_FILE,RESTORE_MANIFEST,...ids].includes(n)))throw Error("Unexpected retained recovery root entry");
+    const seen=new Set();let total=0;
+    for(const e of m.entries){
+      if(!relative(e.path)||!ids.includes(e.path.split('/')[0])||seen.has(e.path)||!["file","directory"].includes(e.type))throw Error("Invalid retained recovery path");seen.add(e.path);
+      const p=path.join(root,e.path),s=owned(p,e.type==="directory");
+      if(e.type==="file"){total+=s.size;if(total>limits.maximumBytes||s.size>limits.maximumFileBytes||s.size!==e.size||sha(p)!==e.sha256)throw Error("Restored retained payload changed before activation");}
+    }
+    for(const id of ids){
+      const prefix=id+"/",dir=path.join(root,id),allowed=new Set(m.entries.filter(e=>e.path.startsWith(prefix)).map(e=>e.path.slice(prefix.length)));
+      if(entry(path.join(dir,"store-lease.sqlite"))){owned(path.join(dir,"store-lease.sqlite"));allowed.add("store-lease.sqlite");}
+      exactTree(dir,allowed);
+    }
+    return{state:"verified",stores:ids.length,backupDigest,manifestDigest:digest,root};
+  }finally{release();}
 }

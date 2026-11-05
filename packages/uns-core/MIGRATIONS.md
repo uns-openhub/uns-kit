@@ -9,6 +9,18 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.46 - Verified retained-store copy and recovery
+
+When crossing `<3.0.46` to `>=3.0.46`, existing rename and unbound consumers
+remain compatible. An explicit
+`transfer: "copy-verified"` adds stopped-source review and bounded asynchronous
+opaque copying between local mounts. Use the same operation/checksum after
+interruption; return current work and retain the original copy. Full Runtime
+recovery requires the matching verified offline retained root before RTT owners
+can be activated. See `docs/retained-store-adoption.md`, bundled as the core
+retained-store guide. No application-specific Controller logic, queue conversion,
+new default handover protocol or automatic disk persistence is introduced.
+
 ## 3.0.45 - Opt-in retained-store storage protocol
 
 When crossing `<3.0.45` to `>=3.0.45`, ordinary applications keep their current

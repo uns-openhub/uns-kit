@@ -4,6 +4,9 @@ import path from "node:path";
 import { z } from "zod";
 
 import { available, maintenanceLease, runtimeLease } from "./retained-store-storage.mjs";
+import { inspectRetainedCopy, applyRetainedCopy, type RetainedCopyFingerprint } from "./retained-store-copy.mjs";
+import { retainedStoreJob } from "./retained-store-job.mjs";
+const copyLimits = () => JSON.parse(fs.readFileSync(new URL("./retained-store-storage-contract.json", import.meta.url), "utf8"));
 
 const segment = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 const relative = z
@@ -60,7 +63,7 @@ export type StoreBinding = {
   owner: StoreOwner;
   maintenance: true;
 };
-export type ResourceMove = { id: string; relative: string; kind: "file" | "directory"; device: number; inode: number };
+export type ResourceMove = { id: string; relative: string; kind: "file" | "directory"; device: number; inode: number; content?: RetainedCopyFingerprint };
 export type StoreMovePlan = {
   storeId: string;
   generation: string;
@@ -69,6 +72,8 @@ export type StoreMovePlan = {
   directory: string;
   slots: RetainedStoreManifest["resources"];
   moves: ResourceMove[];
+  transfer?: "copy-verified";
+  originalMoves?: ResourceMove[];
 };
 const ownerSchema = z.object({ rttNode: segment, version: segment, instanceId: segment }).strict();
 const bindingSchema = z
@@ -155,7 +160,7 @@ export function writeRetainedStoreJson(file: string, value: unknown): void {
 export function readRetainedStoreManifest(packageDirectory: string): RetainedStoreManifest {
   return retainedStoreManifestSchema.parse(readRetainedStoreJson(path.join(packageDirectory, RETAINED_STORE_MANIFEST)));
 }
-export function prepareRetainedStoreMove(source: string, root: string, storeId: string, manifest: RetainedStoreManifest): StoreMovePlan {
+export function prepareRetainedStoreMove(source: string, root: string, storeId: string, manifest: RetainedStoreManifest, transfer?: "copy-verified", deferContent=false): StoreMovePlan {
   z.uuid().parse(storeId);
   retainedStoreManifestSchema.parse(manifest);
   assertRetainedStorePath(source);
@@ -168,7 +173,8 @@ export function prepareRetainedStoreMove(source: string, root: string, storeId: 
   const rootStat = existingRoot ?? fs.statSync(path.dirname(root)),
     sourceStat = fs.statSync(source);
   if (root === source || root.startsWith(source + path.sep) || source.startsWith(root + path.sep)) throw Error("Nested retained store roots");
-  if (rootStat.dev !== sourceStat.dev) throw Error("Retained store requires same filesystem; copy is not permitted");
+  if (transfer !== undefined && transfer !== "copy-verified") throw Error("Unsupported retained transfer");
+  if (!transfer && rootStat.dev !== sourceStat.dev) throw Error("Retained store requires same filesystem; review an explicit verified copy");
   const moves: ResourceMove[] = [];
   for (const resource of manifest.resources) {
     const file = path.join(source, resource.path);
@@ -180,14 +186,16 @@ export function prepareRetainedStoreMove(source: string, root: string, storeId: 
     }
     if (
       s.uid !== process.getuid?.() ||
-      s.dev !== rootStat.dev ||
+      (!transfer && s.dev !== rootStat.dev) ||
       s.isSymbolicLink() ||
       (resource.kind === "file" ? !s.isFile() || s.nlink !== 1 : !s.isDirectory())
     )
       throw Error("Unsafe retained resource");
-    moves.push({ id: resource.id, relative: resource.path, kind: resource.kind, device: s.dev, inode: s.ino });
+    moves.push({ id: resource.id, relative: resource.path, kind: resource.kind, device: s.dev, inode: s.ino,
+      ...(transfer&&!deferContent ? {content:inspectRetainedCopy(file,resource.kind,copyLimits())} : {}) });
   }
-  return { storeId, generation: randomUUID(), format: manifest.format, source, directory, slots: manifest.resources, moves };
+  if(transfer && (moves.reduce((n,m)=>n+(m.content?.bytes??0),0)>copyLimits().maximumBytes || moves.reduce((n,m)=>n+(m.content?.entries??0),0)>copyLimits().maximumEntries))throw Error("Retained copy aggregate limit");
+  return { storeId, generation: randomUUID(), format: manifest.format, source, directory, slots: manifest.resources, moves, ...(transfer?{transfer}:{}) };
 }
 function matches(file: string, move: ResourceMove): boolean {
   assertRetainedStorePath(file);
@@ -203,7 +211,8 @@ function matches(file: string, move: ResourceMove): boolean {
 }
 /** Caller durably records the complete plan and holds its resource reservation first.
  * Each rename is atomic; the multi-resource operation is deliberately resumable. */
-export function applyRetainedStoreMove(plan: StoreMovePlan, direction: "adopt" | "return", afterMove?: (id: string) => void): void {
+export function applyRetainedStoreMove(plan: StoreMovePlan, direction: "adopt" | "return", afterMove?: (id: string) => void, onFile?: (file:string)=>void, validateOnly=false): void {
+  const resourceMove = z.object({id:segment,relative,kind:z.enum(["file","directory"]),device:z.number().int().nonnegative(),inode:z.number().int().nonnegative(),content:z.object({digest:z.string().regex(/^[a-f0-9]{64}$/),bytes:z.number().int().nonnegative().max(copyLimits().maximumBytes),entries:z.number().int().positive().max(copyLimits().maximumEntries)}).strict().optional()}).strict();
   z.object({
     storeId: z.uuid(),
     generation: z.uuid(),
@@ -223,19 +232,9 @@ export function applyRetainedStoreMove(plan: StoreMovePlan, direction: "adopt" |
           .strict(),
       )
       .max(16),
-    moves: z
-      .array(
-        z
-          .object({
-            id: segment,
-            relative,
-            kind: z.enum(["file", "directory"]),
-            device: z.number().int().nonnegative(),
-            inode: z.number().int().nonnegative(),
-          })
-          .strict(),
-      )
-      .max(16),
+    moves:z.array(resourceMove).max(16),
+    transfer:z.literal("copy-verified").optional(),
+    originalMoves:z.array(resourceMove).max(16).optional(),
   })
     .strict()
     .parse(plan);
@@ -259,6 +258,13 @@ export function applyRetainedStoreMove(plan: StoreMovePlan, direction: "adopt" |
   const directoryStat = fs.lstatSync(plan.directory);
   if (!directoryStat.isDirectory() || directoryStat.uid !== process.getuid?.() || directoryStat.mode & 0o077)
     throw Error("Unsafe retained store directory");
+  if(plan.transfer){
+    if(plan.moves.some(m=>!m.content) || plan.originalMoves?.some(m=>!m.content))throw Error("Verified copy requires reviewed content fingerprints");
+    for(const entries of [plan.moves,plan.originalMoves??[]])if(entries.reduce((n,m)=>n+(m.content?.bytes??0),0)>copyLimits().maximumBytes||entries.reduce((n,m)=>n+(m.content?.entries??0),0)>copyLimits().maximumEntries)throw Error("Retained copy aggregate limit");
+    if((plan.originalMoves??[]).some(m=>!manifest.resources.some(r=>r.id===m.id&&r.path===m.relative&&r.kind===m.kind)))throw Error("Original copy differs from declared resources");
+    if(!validateOnly)applyRetainedCopy(plan,direction,copyLimits(),afterMove,onFile); return;
+  }
+  if(plan.originalMoves)throw Error("Original copy receipt requires verified transfer");
   for (const move of plan.moves) {
     const legacy = path.join(plan.source, move.relative),
       stable = path.join(plan.directory, move.id);
@@ -344,6 +350,7 @@ export const retainedStoreSelectionSchema = z
     sourceInstanceId: segment,
     targetVersion: segment,
     targetInstanceId: segment,
+    transfer:z.literal("copy-verified").optional(),
   })
   .strict()
   .refine((x) => x.sourceVersion !== x.targetVersion || x.sourceInstanceId !== x.targetInstanceId, "Source and target must differ");
@@ -355,8 +362,17 @@ export const retainedStoreRequestSchema = z.discriminatedUnion("action", [
 export type RetainedStoreRequest = z.infer<typeof retainedStoreRequestSchema>;
 
 /** Capture mutable control files from the current stopped owner before persisting return intent. */
-export function prepareRetainedStoreReturn(plan: StoreMovePlan): StoreMovePlan {
+export function prepareRetainedStoreReturn(plan: StoreMovePlan,deferContent=false): StoreMovePlan {
   const moves: ResourceMove[] = [];
+  if(plan.transfer){
+    for(const slot of plan.slots){
+      const stable=path.join(plan.directory,slot.id),legacy=path.join(plan.source,slot.path),a=retainedStoreEntry(stable),b=retainedStoreEntry(legacy);
+      if(a){assertRetainedStorePath(stable);moves.push({id:slot.id,relative:slot.path,kind:slot.kind,device:a.dev,inode:a.ino,...(!deferContent?{content:inspectRetainedCopy(stable,slot.kind,copyLimits())}:{})});}
+      else if(b){const original=plan.moves.find(m=>m.id===slot.id);if(!original||!matches(legacy,original)||(!deferContent&&retainedStoreDigest(inspectRetainedCopy(legacy,slot.kind,copyLimits()))!==retainedStoreDigest(original.content)))throw Error("Original retained copy changed");}
+      else if(slot.required)throw Error("Current retained resource missing");
+    }
+    return{...plan,moves,originalMoves:plan.moves};
+  }
   for (const slot of plan.slots) {
     const stable = path.join(plan.directory, slot.id),
       legacy = path.join(plan.source, slot.path);
@@ -388,6 +404,21 @@ export function openRetainedStoreLease(binding: StoreBinding): { close: () => vo
 }
 export function openRetainedStoreMaintenance(directory: string): () => void {
   return maintenanceLease(directory);
+}
+export async function prepareRetainedStoreMoveAsync(source:string,root:string,id:string,manifest:RetainedStoreManifest,transfer?:"copy-verified"):Promise<StoreMovePlan>{
+ const plan=prepareRetainedStoreMove(source,root,id,manifest,transfer,!!transfer);
+ if(transfer)for(const move of plan.moves)move.content=await retainedStoreJob({action:"inspect",path:path.join(source,move.relative),kind:move.kind,limits:copyLimits()}) as RetainedCopyFingerprint;
+ return plan;
+}
+export async function prepareRetainedStoreReturnAsync(plan:StoreMovePlan):Promise<StoreMovePlan>{
+ const back=prepareRetainedStoreReturn(plan,!!plan.transfer);
+ if(plan.transfer)for(const move of back.moves)move.content=await retainedStoreJob({action:"inspect",path:path.join(plan.directory,move.id),kind:move.kind,limits:copyLimits()}) as RetainedCopyFingerprint;
+ return back;
+}
+export async function applyRetainedStoreMoveAsync(plan:StoreMovePlan,direction:"adopt"|"return",afterMove?:(id:string)=>void):Promise<void>{
+ if(!plan.transfer){applyRetainedStoreMove(plan,direction,afterMove);return;}
+ applyRetainedStoreMove(plan,direction,undefined,undefined,true);
+ await retainedStoreJob({action:"apply",plan,direction,limits:copyLimits()},afterMove);
 }
 export const retainedStoreBackupSchema = z
   .object({

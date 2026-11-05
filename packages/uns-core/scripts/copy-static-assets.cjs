@@ -23,7 +23,7 @@ fs.copyFileSync(path.resolve("src/runtime/process-group-backup-contract.json"),p
 for (const asset of ['mqtt-output-state-program.mjs','mqtt-output-state-program.d.mts','mqtt-output-state-contract.json']) {
   fs.copyFileSync(path.resolve('src/runtime',asset),path.resolve('dist/runtime',asset));
 }
-for (const asset of ["retained-store-storage.mjs", "retained-store-storage.d.mts", "retained-store-storage-contract.json"]) {
+for (const asset of ["retained-store-job.mjs", "retained-store-job.d.mts", "retained-store-copy.mjs", "retained-store-copy.d.mts", "retained-store-storage.mjs", "retained-store-storage.d.mts", "retained-store-storage-contract.json"]) {
   fs.copyFileSync(path.resolve("src/runtime", asset), path.resolve("dist/runtime", asset));
 }
 fs.copyFileSync(path.resolve("../../docs/retained-store-adoption.md"), path.resolve("dist/runtime/retained-store-guide.md"));

@@ -1,7 +1,8 @@
 # Retained stores: opt-in same-host adoption
 
-Prepared in UNS Kit 3.0.45; npm publication and coordinated Controller/Runtime
-releases are separate steps. Existing applications do not change behavior.
+Retained-store adoption starts in UNS Kit 3.0.45. The 3.0.46 extension adds
+explicit copying between local mounts and verification of recovered stores.
+Managed activation requires coordinated Controller and Runtime releases. Existing applications do not change behavior.
 This is a filesystem capability, separate from the small JSON
 handover-state contract and MQTT output persistence. It does not change the
 default handover protocol, enable disk queues, or transfer data between hosts.
@@ -120,3 +121,44 @@ cannot be used as a complete queue restore. Restore retains store/owner/generati
 identity at the same logical root on another offline volume, and leaves an applying
 fence until complete. Known private partial staging files may be re-created only
 from the verified snapshot; differing published work is never overwritten.
+
+## Cross-mount transfer and recovery verification in 3.0.46
+
+Same-filesystem rename remains the default.
+For initial relocation to a separately mounted Runtime volume, the host may
+explicitly select `transfer: "copy-verified"`. Stop the source cleanly **before**
+reviewing this transport. Review pins content hashes, aggregate byte/file counts,
+resource identities, both installed artifacts, configuration and supervisor epoch.
+There is no automatic `EXDEV` fallback or caller-selected filesystem path.
+
+The host uses `prepareRetainedStoreMoveAsync`, `applyRetainedStoreMoveAsync` and
+`prepareRetainedStoreReturnAsync`. Bounded worker jobs perform opaque hashing and
+copying while the host event loop can serve health and recovery reads. Persist the
+complete plan before mutation and hold the existing maintenance/lifecycle fences
+through the durable outcome. Jobs have a 128MiB old-generation heap and a 300s
+bound; uncertainty always requires reconciliation of the same operation.
+
+Copy stages and fsyncs each declared resource on its receiving mount, verifies
+its exact contents and atomically publishes it. Source files remain unchanged and
+fenced; allow space for both copies. Known incomplete scratch can be resumed from
+the unchanged reviewed source. Unknown entries, links, changed source bytes and
+differing published files are preserved and refused. The existing limits remain
+32 stores, 100,000 entries, 64GiB aggregate files and 32GiB per file.
+
+Return copies the **current** stopped store back. If current work differs from
+the original, the original is first preserved as
+`.retained-original-<store UUID>-<resource ID>` beside its legacy path. The retired
+stable copy remains inert and is included by full backup; it cannot acquire a
+runtime lease. No cleanup, resource merge, conversion or cross-host transfer is
+implied. Runtime disk capacity and the application's destination acknowledgement
+semantics remain independent operational requirements.
+
+Offline restore now retains a verified local snapshot manifest. The data-only
+`verify-restored` / `verify-root` actions rehash exact declared payloads under an
+exclusive root lease before Runtime activation. A completed restore retry never
+replaces newer application data. Full RTT stage/activation/completion binds the
+verified root, signed backup digest and local manifest digest into its protected
+receipts. Missing, excluded, unfinished or altered storage cannot enable bound
+owners. After application work advances, do not activate an old snapshot: preserve
+current storage and use a fresh reviewed owner transition. Historic operation
+plans pin original physical files and are not rebased after a full restore.
