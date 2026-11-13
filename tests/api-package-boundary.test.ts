@@ -45,6 +45,7 @@ it("rebuilds incomplete API output before packing and imports the real archive a
       assert.equal(typeof api.UnsApiProxy, 'function');
       assert.equal(typeof api.registerApiCatalog, 'function');
       assert.equal(typeof api.defineDataCatalogOfferSource, 'function');
+      assert.equal(typeof api.catalogPublicationHandler, 'function');
     `,
       ],
       { cwd: consumer, stdio: ["ignore", "pipe", "inherit"], timeout: 15_000 },
@@ -78,3 +79,27 @@ it("rejects an archive whose manifest points to missing runtime or type entry po
     rmSync(temporary, { recursive: true, force: true });
   }
 }, 20_000);
+
+it("includes common service access, publication types and bundled adoption guidance in the archives", () => {
+  const temporary = mkdtempSync(path.join(tmpdir(), "uns-service-access-package-"));
+  try {
+    for (const name of ["core", "api"]) {
+      execFileSync("pnpm", ["pack", "--pack-destination", temporary], {
+        cwd: path.resolve(`packages/uns-${name}`), stdio: "pipe", timeout: 60_000,
+      });
+      const archive = path.join(temporary, readdirSync(temporary).find(file => file.startsWith(`uns-kit-${name}-`) && file.endsWith(".tgz"))!);
+      const contents = execFileSync("tar", ["-tzf", archive], {encoding: "utf8"}).split("\n");
+      const modules = name === "core" ? ["runtime/service-access", "runtime/catalog-publication", "runtime/catalog-publication-client"] : ["catalog-publication-handler"];
+      for (const module of modules) {
+        expect(contents).toContain(`package/dist/${module}.js`);
+        expect(contents).toContain(`package/dist/${module}.d.ts`);
+      }
+      if (name === "core") {
+        expect(contents).toContain("package/dist/runtime/service-access-guide.md");
+        const guide = execFileSync("tar", ["-xOzf", archive, "package/dist/runtime/service-access-guide.md"], {encoding: "utf8"});
+        expect(guide).toContain("unsDatahub");
+        expect(guide).toContain("parseServiceAccessDeclaration");
+      }
+    }
+  } finally { rmSync(temporary, {recursive: true, force: true}); }
+}, 120_000);

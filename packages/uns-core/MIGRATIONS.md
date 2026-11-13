@@ -9,6 +9,25 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.47 - Common Service access and publications
+
+When crossing `<3.0.47` to `>=3.0.47`, adoption is explicit; existing endpoint authorization and caller forwarding do
+not change automatically. Ship `service-access.json` referenced by
+`package.json` `unsDatahub.serviceAccess`, retaining the data file in the build.
+Use `parseServiceAccessDeclaration` and review the exact installed release in
+Controller Service access. Background services need no Catalog/API. Optional
+`publications` reuse the catalog manifest, `CatalogPublicationClient`, and API
+`catalogPublicationHandler`; call `api.registerCatalogRoute()` for signed launch
+route publication. Source approval remains separate from raw workload rights.
+The unpublished earlier `catalogAccess` marker is a compatibility reader only;
+never declare both. Read the [bundled Service access guide](dist/runtime/service-access-guide.md).
+
+Do not remove existing credentials until the new path passes deployed
+acceptance. The matching Controller capability must be installed and reviewed
+before enabling the declaration. SDK publication and consumer frozen-lock
+updates remain separate steps. This bounded adapter covers UNS history; it
+does not create SQL, broker or arbitrary external-resource permissions.
+
 ## 3.0.46 - Verified retained-store copy and recovery
 
 When crossing `<3.0.46` to `>=3.0.46`, existing rename and unbound consumers

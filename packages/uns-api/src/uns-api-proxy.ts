@@ -151,6 +151,13 @@ export default class UnsApiProxy extends UnsProxy {
     this.statusInterval = setInterval(() => this.emitStatusMetrics(), this.statusIntervalMs);
   }
 
+  /** Catalog mediation opts into the same signed installed-launch route lease. */
+  public registerCatalogRoute():void {
+    const environment=runtimeRouteRegistrationEnvironment(process.env);
+    if(!environment)throw Error("Catalog publication requires a managed runtime launch");
+    this.registerOperatorRoute(environment);
+  }
+
   public setOwnershipGate(gate: () => boolean): void { this.app.setOwnershipGate(gate); }
   public async drainRequests(): Promise<void> { await this.app.drainRequests(); }
 

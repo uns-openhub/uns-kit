@@ -27,6 +27,7 @@ for (const asset of ["retained-store-job.mjs", "retained-store-job.d.mts", "reta
   fs.copyFileSync(path.resolve("src/runtime", asset), path.resolve("dist/runtime", asset));
 }
 fs.copyFileSync(path.resolve("../../docs/retained-store-adoption.md"), path.resolve("dist/runtime/retained-store-guide.md"));
+fs.copyFileSync(path.resolve("../../docs/catalog-publication-access.md"), path.resolve("dist/runtime/service-access-guide.md"));
 const retainedExamples = path.resolve("dist/runtime/retained-store-examples");
 fs.mkdirSync(retainedExamples, { recursive: true });
 for (const name of ["measurement-worker.manifest.json", "index-worker.manifest.json"]) {

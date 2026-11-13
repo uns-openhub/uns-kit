@@ -1,6 +1,6 @@
 {
   "name": "@uns-kit/api",
-  "version": "3.0.46",
+  "version": "3.0.47",
   "description": "Express-powered API gateway plugin for UnsProxyProcess with JWT/JWKS support.",
   "type": "module",
   "license": "MIT",
@@ -22,6 +22,10 @@
     "dist"
   ],
   "exports": {
+    "./catalog-publication-handler.js": {
+      "types": "./dist/catalog-publication-handler.d.ts",
+      "import": "./dist/catalog-publication-handler.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"

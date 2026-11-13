@@ -4,3 +4,4 @@ export * from "./api-interfaces.js";
 export * from "./api-event-routing.js";
 export * from "./runtime-route-registration.js";
 export * from "./parquet.js";
+export * from './catalog-publication-handler.js';
