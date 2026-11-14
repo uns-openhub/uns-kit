@@ -1,6 +1,6 @@
 # catalog-summary
 
-A complete Node.js 22+ example using published SDK APIs from 3.0.47 onward.
+A complete Node.js 22+ example using SDK APIs from 3.0.49 onward.
 Read the [Service access walkthrough](https://github.com/uns-openhub/uns-kit/blob/master/docs/catalog-publication-access.md) for the declaration, Controller review and acceptance steps.
 
 ```sh
@@ -24,3 +24,7 @@ and approve the publication for the intended audience. Give a test reader access
 to the operation path, not the private source path. Execute a timezone-qualified
 window of at most one hour. Expect {count, hasMore}; raw source fields are excluded.
 A direct source request with the reader or service token must return 403.
+
+The access declaration is inline in package.json. This representation requires
+Controller capability `rttServiceAccessInline`; it is unsupported by 2.2.96.
+The SDK also accepts a package-relative JSON file reference for older hosts.

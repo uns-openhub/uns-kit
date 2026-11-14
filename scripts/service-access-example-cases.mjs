@@ -1,10 +1,10 @@
 import { buildApiInteractionPath, buildApiInteractionsFromDataOfferSources } from "@uns-kit/api";
 import { CatalogPublicationClient } from "@uns-kit/core/runtime/catalog-publication-client.js";
-import { parseServiceAccessDeclaration } from "@uns-kit/core/runtime/service-access.js";
+import { loadServiceAccessDeclaration } from "@uns-kit/core/runtime/service-access-package.js";
 import { ServiceTokenProvider } from "@uns-kit/core/tools/auth/service-token-provider.js";
 import express from "express";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -49,7 +49,7 @@ test("background example uses the current file, bounded request and no caller cr
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ results: [{ data: [[1], [2]] }] }));
   });
-  const declaration = parseServiceAccessDeclaration(JSON.parse(await readFile("./examples/service-access/background-reader/service-access.json")));
+  const declaration = await loadServiceAccessDeclaration("./examples/service-access/background-reader/package.json");
   assert.deepEqual(declaration.permissions, { scopes: ["read:uns"], accessRules: [sourceTopic] });
   assert.equal(declaration.publications, undefined);
   assert.equal((await readHistory(base, from, to, { tokenProvider: provider })).length, 2);
@@ -104,7 +104,7 @@ async function catalog(t) {
   const seen = [];
   let deny = false,
     invalid = false;
-  const declaration = parseServiceAccessDeclaration(JSON.parse(await readFile("./examples/service-access/catalog-summary/service-access.json")));
+  const declaration = await loadServiceAccessDeclaration("./examples/service-access/catalog-summary/package.json");
   const base = await listen(t, async (req, res) => {
     const value = await body(req);
     seen.push({ auth: req.headers.authorization, path: req.url, value });

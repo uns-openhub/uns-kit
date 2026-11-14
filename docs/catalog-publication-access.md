@@ -1,8 +1,12 @@
 # Service access: from declaration to a running service
 
-For application developers and coding agents using **SDK 3.0.47 or later**.
+For application developers and coding agents using **SDK 3.0.49 or later**.
 Common Service access also requires a matching Controller; these workflows were
-verified with Controller **2.2.95**. SDK installation alone enables no host rights.
+originally verified with Controller **2.2.95** using file declarations. Inline
+package declarations require a Controller advertising `rttServiceAccessInline`.
+Controller 2.2.96 does not support inline declarations. SDK installation alone
+enables no host rights. The configuration-save approval UI is a separate planned
+Controller change; the approval steps below describe the existing released UI.
 
 The developer declares a permission ceiling and uses the SDK. An administrator
 reviews the installed release in **Micro services → instance → Service access**.
@@ -41,16 +45,22 @@ The npm core package also ships this guide at
 to your own directory before installing/building it; do not edit `node_modules`.
 Source code, not repeated prose fragments, is the complete runnable example.
 
-Each `package.json` points at the root declaration and retains it in the artifact:
+For new services, put the declaration directly in `package.json`:
 
 ```json
 {
-  "files": ["dist", "service-access.json", "config-example.json"],
+  "files": ["dist", "config-example.json"],
   "unsDatahub": {
     "schemaVersion": 1,
     "kind": "addon",
     "controllerCompatibility": ">=2 <3",
-    "serviceAccess": "service-access.json"
+    "serviceAccess": {
+      "protocol": 1,
+      "permissions": {
+        "scopes": ["read:uns"],
+        "accessRules": ["example/background/line-1/equipment/main/temperature"]
+      }
+    }
   }
 }
 ```
@@ -59,6 +69,27 @@ This is metadata to merge into the application's existing package.json. Keep the
 real name/version/dependencies/scripts. The SDK is imported as published packages;
 no copied validators, source overlays or application-name Controller branches.
 Do not declare the historical `catalogAccess` marker alongside `serviceAccess`.
+
+Existing `"serviceAccess": "service-access.json"` references remain supported.
+Retain that file in `files` when using the file form, including for Controllers
+without inline support. Use one representation; the normalized declaration and
+its digest are identical when the content is identical. Neither form contains
+tokens or an administrator's approval.
+
+Runtime code can read the same definition without duplicating it:
+
+```js
+import { loadServiceAccessDeclaration } from '@uns-kit/core/runtime/service-access-package.js';
+const declaration = await loadServiceAccessDeclaration(new URL('../package.json', import.meta.url));
+if (!declaration) throw new Error('Declare the service requirements in package.json.');
+```
+
+This example path is for an entry point directly inside `dist/`. The loader
+reads bounded JSON data; it never imports application code. File references are
+relative to the package, with traversal/symlink escapes rejected. Each JSON file,
+including package.json, is limited to 64 KiB. Host integrations can use the pure
+`resolveServiceAccessDeclaration(packageData, readDeclaration)` with their own
+bounded reader and the exported `serviceAccessPackageReferenceSchema`.
 
 In either copied example:
 
@@ -132,10 +163,10 @@ optional `publications` declaration defines `sample-count`, GET JSON, from/to wi
 a timezone, at most one hour/1000 rows from
 `example/private/line-1/equipment/main/temperature`, and a closed result containing
 only `{count, hasMore}`. The response cap is 4096 bytes. See its complete
-`service-access.json`; the source and response schema are reviewed data.
+`package.json.unsDatahub.serviceAccess`; the source and response schema are reviewed data.
 
 `catalog-summary/src/index.mjs` reads and validates that declaration with
-`parseServiceAccessDeclaration`, then constructs `CatalogPublicationClient` using
+`loadServiceAccessDeclaration`, then constructs `CatalogPublicationClient` using
 the real Controller-injected `RTT_NODE`, `RTT_INSTANCE_ID`, `version` and
 `UNS_CONTROLLER_PUBLIC_BASE`. It configures JWT/JWKS authentication, calls
 `api.registerCatalogRoute()` for the signed installed-launch route lease, and

@@ -2,8 +2,7 @@ import "@uns-kit/api";
 import { registerApiCatalog } from "@uns-kit/api";
 import { ConfigFile, UnsProxyProcess } from "@uns-kit/core";
 import { CatalogPublicationClient } from "@uns-kit/core/runtime/catalog-publication-client.js";
-import { parseServiceAccessDeclaration } from "@uns-kit/core/runtime/service-access.js";
-import { readFile } from "node:fs/promises";
+import { loadServiceAccessDeclaration } from "@uns-kit/core/runtime/service-access-package.js";
 
 import { createSummaryOffer } from "./offer.mjs";
 
@@ -12,7 +11,8 @@ const required = (key) => {
   if (!value) throw new Error(`Missing managed runtime value: ${key}`);
   return value;
 };
-const declaration = parseServiceAccessDeclaration(JSON.parse(await readFile(new URL("../service-access.json", import.meta.url), "utf8")));
+const declaration = await loadServiceAccessDeclaration(new URL("../package.json", import.meta.url));
+if (!declaration?.publications) throw new Error("Package must declare its catalog operations.");
 const client = new CatalogPublicationClient({
   controllerBase: required("UNS_CONTROLLER_PUBLIC_BASE"),
   rttNode: required("RTT_NODE"),

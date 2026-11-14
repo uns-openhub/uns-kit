@@ -1,6 +1,6 @@
 # background-reader
 
-A complete Node.js 22+ example using published SDK APIs from 3.0.47 onward.
+A complete Node.js 22+ example using SDK APIs from 3.0.49 onward.
 Read the [Service access walkthrough](https://github.com/uns-openhub/uns-kit/blob/master/docs/catalog-publication-access.md) for the declaration, Controller review and acceptance steps.
 
 ```sh
@@ -23,3 +23,7 @@ This worker has no API or catalog. It polls five minutes of history, at most
 your own test environment; zero rows is a valid result. Its token can read that
 source, while another source must return 403. SIGINT/SIGTERM aborts the current
 request and stops polling before runtime cleanup.
+
+The access declaration is inline in package.json. This representation requires
+Controller capability `rttServiceAccessInline`; it is unsupported by 2.2.96.
+The SDK also accepts a package-relative JSON file reference for older hosts.

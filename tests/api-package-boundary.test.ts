@@ -89,7 +89,7 @@ it("includes common service access, publication types and bundled adoption guida
       });
       const archive = path.join(temporary, readdirSync(temporary).find(file => file.startsWith(`uns-kit-${name}-`) && file.endsWith(".tgz"))!);
       const contents = execFileSync("tar", ["-tzf", archive], {encoding: "utf8"}).split("\n");
-      const modules = name === "core" ? ["runtime/service-access", "runtime/catalog-publication", "runtime/catalog-publication-client"] : ["catalog-publication-handler"];
+      const modules = name === "core" ? ["runtime/service-access", "runtime/service-access-package", "runtime/catalog-publication", "runtime/catalog-publication-client"] : ["catalog-publication-handler"];
       for (const module of modules) {
         expect(contents).toContain(`package/dist/${module}.js`);
         expect(contents).toContain(`package/dist/${module}.d.ts`);
@@ -98,7 +98,8 @@ it("includes common service access, publication types and bundled adoption guida
         expect(contents).toContain("package/dist/runtime/service-access-guide.md");
         const guide = execFileSync("tar", ["-xOzf", archive, "package/dist/runtime/service-access-guide.md"], {encoding: "utf8"});
         expect(guide).toContain("unsDatahub");
-        expect(guide).toContain("parseServiceAccessDeclaration");
+        expect(guide).toContain("loadServiceAccessDeclaration");
+        expect(guide).toContain("resolveServiceAccessDeclaration");
       }
     }
   } finally { rmSync(temporary, {recursive: true, force: true}); }

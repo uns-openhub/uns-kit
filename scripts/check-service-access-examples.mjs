@@ -36,19 +36,19 @@ try {
   const bundled = path.join(consumer, "node_modules/@uns-kit/core/dist/runtime/service-access-examples");
   const examples = path.join(consumer, "examples/service-access");
   await cp(bundled, examples, { recursive: true });
-  const { parseServiceAccessDeclaration } = await import(path.join(consumer, "node_modules/@uns-kit/core/dist/runtime/service-access.js"));
+  const { loadServiceAccessDeclaration } = await import(path.join(consumer, "node_modules/@uns-kit/core/dist/runtime/service-access-package.js"));
   for (const [name, module] of [
     ["background-reader", "reader.mjs"],
     ["catalog-summary", "offer.mjs"],
   ]) {
     const dir = path.join(examples, name);
-    const declaration = JSON.parse(await readFile(path.join(dir, "service-access.json")));
-    parseServiceAccessDeclaration(declaration);
+    const declaration = await loadServiceAccessDeclaration(path.join(dir, "package.json"));
+    if (!declaration) throw new Error(`${name}: missing declaration`);
     for (const file of ["index.mjs", module]) run("node", ["--check", path.join(dir, "src", file)], consumer);
     run("node", ["build.mjs"], dir);
     const [packed] = JSON.parse(run("npm", ["pack", "--dry-run", "--ignore-scripts", "--json"], dir));
     const names = new Set(packed.files.map((f) => f.path));
-    for (const file of ["dist/index.js", `dist/${module}`, "service-access.json", "config-example.json"]) {
+    for (const file of ["dist/index.js", `dist/${module}`, "package.json", "config-example.json"]) {
       if (!names.has(file)) throw new Error(`${name}: missing ${file}`);
     }
     if (names.has("config.json") || names.has(".env") || [...names].some((n) => n.startsWith("node_modules/")))
