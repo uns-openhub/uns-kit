@@ -4,8 +4,9 @@
 - `catalog-summary/`: a catalog-only caller requests a bounded derived count; the workload has no direct source permission.
 
 Each folder is an independent, credential-free Node.js package. Copy one folder
-to a new project, install dependencies and build. Deploy/review/start with a
-Controller supporting common Service access (verified with Controller 2.2.95).
+to a new project, install dependencies and build. The declarations are inline in package.json (SDK 3.0.49+). Deploy/review/start
+with a Controller advertising rttServiceAccessInline; Controller 2.2.96 requires
+the compatible file form instead.
 The [walkthrough](https://github.com/uns-openhub/uns-kit/blob/master/docs/catalog-publication-access.md)
 explains what the developer, administrator, Controller, SDK and caller each own.
 

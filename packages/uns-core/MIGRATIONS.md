@@ -9,6 +9,23 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.49 - Inline Service access package declarations
+
+Existing file declarations remain compatible; no permission is granted by this
+upgrade. New services may put the declaration object directly at
+`package.json.unsDatahub.serviceAccess`. Use `loadServiceAccessDeclaration` from
+`@uns-kit/core/runtime/service-access-package.js` for runtime reads, or the pure
+resolver/schema from `runtime/service-access.js` for host integrations. Both forms
+normalize to the same semantic digest. Do not declare both `serviceAccess` and
+historical `catalogAccess`.
+
+Inline metadata requires a Controller advertising `rttServiceAccessInline`;
+Controller 2.2.96 accepts only the file form. Keep the file form until the target
+Controller supports inline declarations. This patch does not implement the planned
+configuration-save approval UI or automatic installation grants. Administrator
+review, caller authorization, MQTT ACLs and rotating token use remain separate.
+Both complete examples now use inline metadata and require the matching host.
+
 ## 3.0.48 - Checked Service access documentation and examples
 
 This patch clarifies existing 3.0.47 contracts; no new permission mode or automatic

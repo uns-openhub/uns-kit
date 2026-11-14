@@ -95,7 +95,7 @@ const cron = await proc.createCrontabProxy("*/5 * * * *", { event: "tick" });
 
 ## Datahub client (last value + history)
 
-`UnsClient` provides a minimal REST client for the UNS OpenHub API, including batch last-value, single-topic catch-all history, and batch range endpoints. Use `ServiceTokenProvider` for Controller-managed services so credential rotation is picked up on every request. Review the service's declared scopes and resource paths before Start; never cache a managed token at application startup.
+`UnsClient` provides a minimal REST client for the UNS OpenHub API, including batch last-value, single-topic catch-all history, and batch range endpoints. Use `ServiceTokenProvider` for Controller-managed services so credential rotation is picked up on every request. Declare requirements in `package.json.unsDatahub.serviceAccess` (SDK 3.0.49+ and an inline-capable Controller), or retain the compatible JSON file reference. Review the service's declared scopes and resource paths before Start; never cache a managed token at application startup.
 
 Read the [source Service access walkthrough](https://github.com/uns-openhub/uns-kit/blob/master/docs/catalog-publication-access.md)
 or bundled `@uns-kit/core/runtime/service-access-guide.md`. Complete background-reader

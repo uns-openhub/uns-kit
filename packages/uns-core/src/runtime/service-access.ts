@@ -41,6 +41,39 @@ export function parseServiceAccessDeclaration(value: unknown): ServiceAccessDecl
   if (!permissions.scopes.length && !publications) throw Error("service_access_capability_required");
   return { protocol: 1, permissions, ...(publications ? { publications } : {}) };
 }
+
+/** Package metadata accepts one inline declaration or one safe relative JSON
+ * reference. Both normalize through the same parser; neither grants authority. */
+export const serviceAccessPackageReferenceSchema = z.union([
+  z.string().min(1).max(512).refine(
+    (value) => !value.includes("\\") && !value.startsWith("/") &&
+      !/^[A-Za-z]:/.test(value) &&
+      value.split("/").every((part) => !!part && part !== "." && part !== ".."),
+    "Expected a package-relative declaration path",
+  ),
+  envelope.transform(parseServiceAccessDeclaration),
+]);
+
+export type ServiceAccessPackageReference = string | ServiceAccessDeclaration;
+
+export async function resolveServiceAccessDeclaration(
+  packageJson: unknown,
+  readDeclaration: (relativePath: string) => Promise<unknown>,
+): Promise<ServiceAccessDeclaration | null> {
+  const pkg = z.object({
+    unsDatahub: z.object({
+      serviceAccess: z.unknown().optional(),
+      catalogAccess: z.unknown().optional(),
+    }).passthrough().optional(),
+  }).passthrough().parse(packageJson);
+  const metadata = pkg.unsDatahub;
+  if (metadata?.serviceAccess === undefined) return null;
+  if (metadata.catalogAccess !== undefined) throw Error("service_access_declaration_conflict");
+  const reference = serviceAccessPackageReferenceSchema.parse(metadata.serviceAccess);
+  return parseServiceAccessDeclaration(
+    typeof reference === "string" ? await readDeclaration(reference) : reference,
+  );
+}
 export const serviceAccessDigest = operatorDigest;
 /** Publication source rules are deliberately not raw UNS permissions. A service
  * combining a background reader with a catalog must not gain their cross-product. */

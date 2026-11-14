@@ -1,6 +1,11 @@
 import { ServiceTokenProvider } from "@uns-kit/core/tools/auth/service-token-provider.js";
+import { loadServiceAccessDeclaration } from "@uns-kit/core/runtime/service-access-package.js";
 
-export const sourceTopic = "example/background/line-1/equipment/main/temperature";
+const declaration = await loadServiceAccessDeclaration(new URL("../package.json", import.meta.url));
+if (declaration?.permissions.scopes.length !== 1 || declaration.permissions.scopes[0] !== "read:uns" ||
+    declaration.permissions.accessRules.length !== 1 || /[+#]/.test(declaration.permissions.accessRules[0]))
+  throw new Error("This example requires one exact declared background source.");
+export const sourceTopic = declaration.permissions.accessRules[0];
 
 /** A background API read has a workload identity and no human caller token. */
 export async function readHistory(controllerBase, from, to, { tokenProvider = new ServiceTokenProvider(), fetch: request = fetch, signal } = {}) {
