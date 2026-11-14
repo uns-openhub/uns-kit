@@ -1,130 +1,246 @@
-# Service access and publications (3.0.47)
+# Service access: from declaration to a running service
 
-This opt-in protocol separates permission to call a catalog operation from
-permission to read its source. It is not a sandbox for arbitrary application
-code or a substitute for restricted database and MQTT identities.
+For application developers and coding agents using **SDK 3.0.47 or later**.
+Common Service access also requires a matching Controller; these workflows were
+verified with Controller **2.2.95**. SDK installation alone enables no host rights.
 
-Package metadata requests authority; it never grants it. Keep existing JWT/JWKS
-endpoint guards. Do not forward caller tokens to privileged sources or retry a
-denied caller read with stronger credentials.
+The developer declares a permission ceiling and uses the SDK. An administrator
+reviews the installed release in **Micro services → instance → Service access**.
+The Controller stores that decision, issues the instance credential and supplies
+its file path. The SDK reads the current credential when making a request. The UI
+is a policy editor, not a place to copy a bearer token into application code.
 
-## Declaration
+## Choose the access model
 
-Ship a bounded JSON file with the installed package, and retain it in the build:
+| Application activity | Credential used | Administrator approves | Mechanism |
+| --- | --- | --- | --- |
+| Background UNS API read | Service token only | `read:uns` and explicit UNS paths | `ServiceTokenProvider` / API client |
+| Approved derived catalog operation | Service token plus the incoming user's token | Service capability, exact publication sources/output and audience; user separately needs operation access | `CatalogPublicationClient` + `catalogPublicationHandler` |
+| Direct MQTT subscribe/publish | Broker credentials | Broker ACLs for the relevant topics | MQTT connection settings and broker authorization |
+| Direct SQL/external API access | That resource's credential | Database/external-system grants | Application adapter and secret references |
+
+**`read:uns` protects OpenHub API reads. It does not install MQTT ACLs.**
+MQTT-style filters in Service access describe API resource paths; their syntax
+does not make the HTTP service token a broker password. `infra.host` and the
+example's `mqtt.username/password` concern runtime MQTT connectivity. Configure
+broker ACLs separately, including the runtime signaling topics your deployment
+requires. A direct database connection is governed by its database identity.
+This capability is not an arbitrary-code sandbox.
+
+## Runnable examples and package contents
+
+Both examples are independent Node.js 22+ projects with complete source,
+credential-free configuration, a declaration, build script and package metadata:
+
+- [Background reader](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/background-reader)
+- [Catalog summary](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/catalog-summary)
+
+The npm core package also ships this guide at
+`@uns-kit/core/runtime/service-access-guide.md` and both projects under
+`node_modules/@uns-kit/core/dist/runtime/service-access-examples/`. Copy a project
+to your own directory before installing/building it; do not edit `node_modules`.
+Source code, not repeated prose fragments, is the complete runnable example.
+
+Each `package.json` points at the root declaration and retains it in the artifact:
 
 ```json
-{"unsDatahub":{"serviceAccess":"service-access.json"}}
+{
+  "files": ["dist", "service-access.json", "config-example.json"],
+  "unsDatahub": {
+    "schemaVersion": 1,
+    "kind": "addon",
+    "controllerCompatibility": ">=2 <3",
+    "serviceAccess": "service-access.json"
+  }
+}
 ```
 
-Use `parseServiceAccessDeclaration` from `@uns-kit/core/runtime/service-access.js`:
+This is metadata to merge into the application's existing package.json. Keep the
+real name/version/dependencies/scripts. The SDK is imported as published packages;
+no copied validators, source overlays or application-name Controller branches.
+Do not declare the historical `catalogAccess` marker alongside `serviceAccess`.
+
+In either copied example:
+
+```sh
+pnpm install
+pnpm run build
+cp config-example.json config.json
+```
+
+Select your local MQTT/Controller endpoints and use environment or secret-provider
+references for credentials. Never commit config.json, .env, keys or tokens. Under
+a Controller deployment, instance configuration is managed by that Controller.
+The examples declare ordinary cold operation, not state-preserving hot handover.
+
+## 1. Background service: no Catalog and no HTTP listener
+
+The background reader asks for one source through the OpenHub history API:
 
 ```json
 {
   "protocol": 1,
   "permissions": {
     "scopes": ["read:uns"],
-    "accessRules": ["example/background/#"]
+    "accessRules": ["example/background/line-1/equipment/main/temperature"]
   }
 }
 ```
 
-This works without a catalog, HTTP endpoint, or human requester. The declaration
-requests a ceiling; an administrator must apply the effective policy under
-**Microservices → instance → Service access** before the service can start with
-a managed identity. Review the exact installed version and declaration digest.
-The administrator can select fewer capabilities and narrower MQTT path filters;
-unknown or administrative scopes are rejected. The identity, revocation and
-same-request reissue mechanisms are the existing managed workload mechanisms.
-UNS resource rules bound direct UNS reads; other recognized runtime scopes retain
-their existing authorization semantics. This protocol does not create new
-SQL, broker, filesystem or arbitrary external-service permissions.
+There is no `publications` section and no human caller. The complete
+`background-reader/src/reader.mjs` imports:
 
-A combined service adds optional `publications`, containing the manifest parsed
-by `parseCatalogPublicationManifest`, to the same envelope. A publication-only
-service uses empty `permissions.scopes` and `permissions.accessRules`. Its
-managed token then has `catalog:sources:read` and **no raw UNS paths**. Adding
-publication sources never adds them to the service's direct `read:uns` rules.
-Publication approval is a separate operation/audience grant and never silently
-grants other package-requested capabilities. Review both in Service access.
-The Catalog contains execution/status and an administrator link to that editor.
-There is one writable publication editor.
+```js
+import { ServiceTokenProvider } from '@uns-kit/core/tools/auth/service-token-provider.js';
+const tokens = new ServiceTokenProvider();
+// Inside each request, not once at application startup:
+const token = await tokens.getAccessToken();
+```
 
-The earlier unpublished `unsDatahub.catalogAccess` marker remains an isolated
-compatibility adapter for the first local fixtures. New consumers use
-`serviceAccess`; declaring both markers is rejected. No released applications
-are automatically migrated.
+It sends the token as `Authorization: Bearer …` to
+`/api/catchall/batch/range` at `UNS_CONTROLLER_PUBLIC_BASE`, with a fixed declared
+source, explicit from/to, a row limit, timeout and no redirects. Missing credentials
+or 401/403 fail the request; no retry with a human or more powerful credential.
+`src/index.mjs` schedules reads only while the runtime is active. Shutdown stops
+admission, aborts the pending read and cleans up the runtime on SIGINT/SIGTERM.
 
-The optional publication manifest supports GET JSON,
-closed JSON schemas (primitive, object and array types; no references, defaults,
-or composition), string query parameters, and exact history source topics.
-Source path segments follow the existing managed-identity resource vocabulary:
-ASCII letters, digits and hyphens. Each source binds required `from`/`to` date-time parameters, a maximum window
-(at most 31 days) and row count (at most 27000). Dates require a UTC offset.
-Wildcard topics, arbitrary URLs/SQL/source selectors and undeclared input fields
-are rejected. The broker caps source responses at 1 MiB; published responses
-have a separately declared cap of at most 1 MiB.
+Administrator steps after deployment:
 
-Each operation declares `caller` or `approved-service`. Both require an explicit
-administrator publication review and current caller permission on the SDK UNS
-resource path (the operation path without `/api/`). In caller mode, source rules
-and `read:uns` must also belong to the caller. Service mode never grants these
-raw permissions to the caller.
+1. Open **Service access** for the exact installed example release and instance.
+2. Use **Restore defaults** to populate the draft, or select `read:uns` and the
+   exact declared path manually. Defaults do not save or grant anything.
+3. Review **Permitted UNS paths**, then **Apply access policy** and confirm.
+   Only declared paths or narrower filters are allowed; do not replace them with `#`.
+4. **Start** the prepared instance. First managed launch requires reviewed access.
+   There is no catalog publication to approve.
 
-## Runtime
+The Controller supplies `UNS_SERVICE_TOKEN_FILE` and runtime endpoint/identity
+metadata. `ServiceTokenProvider` rereads that file for every request, so atomic
+credential rotation is visible without an application restart. When the file is
+configured it is authoritative: missing/empty/unreadable means failure, not fallback.
+Do not cache the returned token for the lifetime of the process.
 
-Use `CatalogPublicationClient` with the installed, normalized manifest and the
-Controller-provided runtime identity (`RTT_NODE`, `version`, `RTT_INSTANCE_ID`,
-`UNS_CONTROLLER_PUBLIC_BASE`). The default `ServiceTokenProvider` reads the
-Controller's rotating token file. There is no caller-token fallback.
+Acceptance on your local stack: create some history for the declared example
+source. Expect 200 for that source and 403 for another source with the same service
+credential. Verify a policy narrowing or revocation takes effect without granting
+additional paths. Zero rows is a valid response if the selected window has no data.
 
-Use `catalogPublicationHandler(client, operationId, transform)` in an existing
-`registerApiCatalog` handler. Call `api.registerCatalogRoute()` to opt into the
-existing signed launch route lease. The transform receives `history(sourceId)`
-and the already validated input. It owns the derived result, not authorization.
-The HTTP helper sets `Cache-Control: no-store` and rejects undeclared result
-fields. Each execution rechecks current authority after asynchronous work,
-including cached application results. Custom downloads and other handlers must
-use the same mediated path; this candidate adds no persistent result cache.
+## 2. Catalog: a user requests a derived result
 
-A publication-only workload token has `catalog:sources:read` and no direct
-`read:uns` authority. A combined service may separately receive `read:uns` on
-its reviewed background paths, without receiving raw access to publication
-sources. The Controller broker checks current user policy, active machine
-identity/token generation, reviewed identity binding, launch, loaded portable
-configuration, publication revision, audience and source bounds. Its internal
-history token is exact-topic, lasts 15 seconds, and never leaves the broker.
-Neither token bytes nor raw records belong in logs, review receipts or audit.
+The catalog summary has empty direct `permissions.scopes` and `accessRules`. Its
+optional `publications` declaration defines `sample-count`, GET JSON, from/to with
+a timezone, at most one hour/1000 rows from
+`example/private/line-1/equipment/main/temperature`, and a closed result containing
+only `{count, hasMore}`. The response cap is 4096 bytes. See its complete
+`service-access.json`; the source and response schema are reviewed data.
 
-Two local acceptance consumers (energy intervals and quality sample counts) use
-the same helper and Controller path. No application-name branch is needed.
+`catalog-summary/src/index.mjs` reads and validates that declaration with
+`parseServiceAccessDeclaration`, then constructs `CatalogPublicationClient` using
+the real Controller-injected `RTT_NODE`, `RTT_INSTANCE_ID`, `version` and
+`UNS_CONTROLLER_PUBLIC_BASE`. It configures JWT/JWKS authentication, calls
+`api.registerCatalogRoute()` for the signed installed-launch route lease, and
+registers the offer with `registerApiCatalog`. Do not manufacture these launch
+variables to make a directly started process appear Controller-managed.
 
-## Adoption boundary
+`src/offer.mjs` wraps its business transform with the actual SDK helper:
 
-The SDK contract is introduced in 3.0.47. A matching Controller implementation
-must also be installed; an SDK upgrade alone does not enable the host capability.
-Existing applications do not change mode
-implicitly. Install the shared SDK release first, update consumer lockfiles,
-then review the matching installed declaration through the Controller.
-Controller publication is bound to the installed declaration and portable
-configuration; edits require review. A changed loaded configuration requires a
-new launch, not token refresh. With the matching Controller candidate, the
-signed digest of the same confirmed live launch survives ordinary credential
-expiry and Controller restart. Current identity, policy, generation and approval
-are still checked; expired bearer tokens remain invalid. Missing, corrupt,
-foreign or changed-launch evidence requires explicit reviewed recovery.
+```js
+catalogPublicationHandler(client, 'sample-count', async ({ history }) => {
+  const rows = await history('temperature');
+  return { count: rows.data.length, hasMore: rows.truncated };
+});
+```
 
+`temperature` is the declared source ID, not an arbitrary topic or URL from the
+request. The complete source also validates the source response. The helper takes
+the caller's bearer from the incoming HTTP request. The client separately reads
+the service token through `ServiceTokenProvider`; they are never substituted for
+each other. The business transform owns the count, not the authorization policy.
 
-## Local common-contract acceptance
+Administrator steps after preparation:
 
-An unrelated background history processor, with no API or Catalog offer, was
-reviewed, narrowed live, revoked, reissued with the same identity and cold-moved
-to another Controller. It retained the same policy and generation across the
-move. A combined service read its separate background source directly, while a
-catalog-only user consumed a derived result from a different approved source.
-Both the user and workload were denied direct access to that publication source.
-A publication-only empty raw policy stayed empty in storage and actual tokens.
+1. Apply only `catalog:sources:read` in **Service access**, with **no direct UNS
+   paths**. This capability permits the reviewed catalog workflow, not raw reads.
+2. Expand **Published operations → Review access**. Check the exact source,
+   maximum interval/rows, **Published fields** and intended audience.
+3. **Review publication**, then **Approve publication**. A selected audience role
+   does not itself grant every user access to the catalog operation.
+4. Give a test reader access to the operation's SDK resource path:
+   `example/public/line-1/equipment/dataset/sample-count/json` (without `/api/`).
+   Do not grant the private source path just to make Execute work.
+5. Start the prepared instance and Execute the operation as that reader, for
+   example `from=2026-01-01T00:00:00Z` and `to=2026-01-01T01:00:00Z`.
 
-These are local candidate checks, including clean packed-SDK installs. They are
-not production, arbitrary-code isolation or external-resource adapter acceptance.
-SDK publication and downstream frozen dependency updates
-remain separate steps.
+When moving an existing service from legacy credentials to this declaration,
+prepare the new version first. Use **Stop → review Service access/publication →
+Start prepared version** on the chosen owner. A still-live older version can
+block inspection of the prepared release; the same-instance Apply guard requires
+this first-adoption sequence. Retain the old configuration for controlled rollback
+until acceptance; do not grant raw access to get past an adoption error.
+
+The request path is:
+
+1. Browser sends the user's token to the service API through the Controller.
+2. The SDK sends its service credential and the caller context to the Controller.
+3. Controller checks current user operation access, audience, active service
+   identity/generation, live launch, loaded configuration, declaration and approval.
+4. Controller obtains bounded source data using a short-lived exact-source
+   credential internally. It never sends that credential to the service/browser.
+5. The service transforms the data; SDK rechecks authority after the asynchronous
+   work and validates the closed output schema before returning JSON.
+
+Only SDK-integrated execution gets that output validation. Preserve ordinary
+endpoint JWT/JWKS guards; a custom endpoint or custom download must use the same
+mediated path. Arbitrary app code with independent DB/MQTT credentials is outside
+this enforcement. Revocation cannot erase bytes already delivered.
+
+Acceptance: reader Execute 200/{count,hasMore}; caller and service direct source
+reads 403; unapproved/revoked publication 403; invalid window/unknown parameter
+400; no raw source fields or credentials in result/logs. The caller needs no
+source permission in `approved-service` mode. `caller` mode instead requires the
+caller's own source permissions as well; it never retries with stronger authority.
+
+## Contract limits
+
+The publication protocol supports GET JSON, string query parameters, exact history
+topics and closed primitive/object/array schemas. Schema references, defaults and
+composition, wildcard source topics, arbitrary URLs/SQL and undeclared inputs are
+rejected. Source path segments use ASCII letters, digits and hyphens. Each source
+binds the required timezone-qualified `from`/`to`, at most 31 days and 27000 rows.
+The broker caps source responses at 1 MiB; the separately declared output cap is
+also at most 1 MiB. The example intentionally chooses narrower limits.
+
+A combined service can declare background `read:uns` paths and `publications` in
+the same envelope. Review both separately. A publication source never becomes a
+directly readable background path just because it appears in the manifest.
+Unknown or administrative service scopes are rejected.
+
+Ordinary credential renewal and Controller restart preserve a confirmed live
+launch binding. They do not approve a different identity, declaration, policy,
+configuration or launch. Missing or changed evidence requires reviewed recovery;
+an expired bearer remains invalid.
+
+## Troubleshooting and agent checklist
+
+| Symptom | Check |
+| --- | --- |
+| Start requires access review | Exact installed release and `unsDatahub.serviceAccess`; admin must apply the policy |
+| Credential file missing | Real Controller launch/file access; never copy a human token into config |
+| Background read 403 | Active workload identity, `read:uns`, matching permitted path, current generation |
+| Catalog 403 | Caller operation access, audience, service capability and current publication approval |
+| Placement/access changed | Current owner/version/loaded config; stop the legacy owner for first adoption and review the prepared release |
+| API works, MQTT denied | Broker credentials/ACLs; API scopes do not create broker access |
+| Configuration changed | Review the new configuration/contract and restart as required; token refresh cannot replace loaded-launch evidence |
+
+For an agent generating a service: choose the model above, use the published SDK
+imports, ship/validate the declaration, preserve local cleanup, and list the admin
+review needed. Do not create identities, modify user rules or broker ACLs, disable
+JWT checks, synthesize launch metadata, or broaden paths as an automatic fix.
+Keep install/build, review, start, release and production deployment separate.
+
+Maintainers run `pnpm run ts:build` and `pnpm run test:service-access-examples`.
+The latter verifies packaged imports/assets, rotating token use, failures and the
+real catalog HTTP helper using synthetic loopback endpoints. It does not certify
+real MQTT ACLs, Controller RBAC/cluster ownership, or production resource grants.
+Additional SQL, filesystem, broker and external-resource permission adapters are
+outside this protocol. Follow the version-bounded core MIGRATIONS.md on adoption.

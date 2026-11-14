@@ -8,10 +8,10 @@ Note: Apps built with uns-kit are intended to be managed by the **UNS OpenHub co
 
 | Package | Description |
 | --- | --- |
-| [`@uns-kit/core`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-core) | Base runtime (UnsProxyProcess, MQTT helpers, config tooling, gRPC gateway). |
-| [`@uns-kit/api`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-api) | Express plugin — HTTP endpoints, JWT/JWKS auth, Swagger, UNS metadata. |
-| [`@uns-kit/cron`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cron) | Cron-driven scheduler that emits UNS events on a fixed cadence. |
-| [`@uns-kit/cli`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cli) | CLI for scaffolding new UNS applications. |
+| [`@uns-kit/core`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-core) | Base runtime (UnsProxyProcess, MQTT helpers, config tooling, gRPC gateway). |
+| [`@uns-kit/api`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-api) | Express plugin — HTTP endpoints, JWT/JWKS auth, Swagger, UNS metadata. |
+| [`@uns-kit/cron`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-cron) | Cron-driven scheduler that emits UNS events on a fixed cadence. |
+| [`@uns-kit/cli`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-cli) | CLI for scaffolding new UNS applications. |
 
 ## Installation
 
@@ -95,47 +95,49 @@ const cron = await proc.createCrontabProxy("*/5 * * * *", { event: "tick" });
 
 ## Datahub client (last value + history)
 
-`UnsClient` provides a minimal REST client for the UNS OpenHub API, including batch last-value, single-topic catch-all history, and batch range endpoints. Prefer a long-lived service token if available; you can pass it directly and skip username/password auth.
+`UnsClient` provides a minimal REST client for the UNS OpenHub API, including batch last-value, single-topic catch-all history, and batch range endpoints. Use `ServiceTokenProvider` for Controller-managed services so credential rotation is picked up on every request. Review the service's declared scopes and resource paths before Start; never cache a managed token at application startup.
+
+Read the [source Service access walkthrough](https://github.com/uns-openhub/uns-kit/blob/master/docs/catalog-publication-access.md)
+or bundled `@uns-kit/core/runtime/service-access-guide.md`. Complete background-reader
+and catalog projects ship in `dist/runtime/service-access-examples/`. A background
+reader uses its service identity only; a catalog operation also carries its caller's
+identity. These API permissions do not create MQTT ACLs or SQL grants.
 
 ```ts
-import { UnsClient } from "@uns-kit/core";
-import { ConfigFile } from "@uns-kit/core";
+import { ServiceTokenProvider, UnsClient } from "@uns-kit/core";
 
-const config = await ConfigFile.loadConfig();
-
-const client = new UnsClient("https://datahub.example.com", {
-  token: process.env.UNS_SERVICE_TOKEN ?? config.uns.token,
-});
+const baseUrl = process.env.UNS_CONTROLLER_PUBLIC_BASE;
+if (!baseUrl) throw new Error("Set the trusted Controller base URL.");
+const client = new UnsClient(baseUrl, { tokenProvider: new ServiceTokenProvider() });
 
 const values = await client.lastValue([
-  "raw/data/line-1/motor/main/temperature",
-  "raw/data/line-1/motor/main/status",
+  "example/plant/line-1/motor/main/temperature",
+  "example/plant/line-1/motor/main/status",
 ]);
-console.log(values);
+// Process the values without logging private records.
 
-const data = await client.getAttributeData("sij/acroni/vv/hrm-furnace/equipment/pusher/output-quantity", {
+const data = await client.getAttributeData("example/plant/line-1/motor/main/temperature", {
   from: "2026-05-07T11:17:01.157Z",
   to: "2026-05-07T11:22:01.157Z",
-  table: "uns_sij_hrm_furnace_data",
   aggregate: "last",
   dedupe: false,
 });
-console.log(data?.toRecords());
+const records = data?.toRecords();
 
 const customData = await client.getData("/projects/project-name/path-to-data/data", {
   fromDate: "20260325",
 });
-console.log(await customData.json());
+const customResult = await customData.json();
 
 const batchHistory = await client.history([
-  "sij/acroni/vv/hrm-furnace/equipment/zone-1/temperature",
-  "sij/acroni/vv/hrm-furnace/equipment/zone-2/temperature",
+  "example/plant/line-1/motor/main/temperature",
+  "example/plant/line-1/motor/main/status",
 ], {
   from: "2026-04-09T06:00:00Z",
   to: "2026-04-09T07:00:00Z",
   limit: 500,
 });
-console.log(batchHistory?.byTopic);
+// Process the bounded batch result.
 ```
 
 ## Sub-Asset Publishing

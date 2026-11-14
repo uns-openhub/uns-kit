@@ -1,0 +1,11 @@
+{
+  "protocol": 1,
+  "permissions": {
+    "scopes": [
+      "read:uns"
+    ],
+    "accessRules": [
+      "example/background/line-1/equipment/main/temperature"
+    ]
+  }
+}

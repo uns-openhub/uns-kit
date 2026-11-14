@@ -9,10 +9,10 @@ For the MQTT topic registry published by the API plugin, see `../../docs/uns-top
 
 | Package                                                                               | Description                                                                 |
 | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| [`@uns-kit/core`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-core) | Base runtime (UnsProxyProcess, MQTT helpers, config tooling, gRPC gateway). |
-| [`@uns-kit/api`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-api)   | Express plugin — HTTP endpoints, JWT/JWKS auth, Swagger, UNS metadata.      |
-| [`@uns-kit/cron`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cron) | Cron-driven scheduler that emits UNS events on a fixed cadence.             |
-| [`@uns-kit/cli`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cli)   | CLI for scaffolding new UNS applications.                                   |
+| [`@uns-kit/core`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-core) | Base runtime (UnsProxyProcess, MQTT helpers, config tooling, gRPC gateway). |
+| [`@uns-kit/api`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-api)   | Express plugin — HTTP endpoints, JWT/JWKS auth, Swagger, UNS metadata.      |
+| [`@uns-kit/cron`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-cron) | Cron-driven scheduler that emits UNS events on a fixed cadence.             |
+| [`@uns-kit/cli`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-cli)   | CLI for scaffolding new UNS applications.                                   |
 
 ## Declared operator operations (3.0.42+)
 
@@ -27,6 +27,22 @@ handles a transient public-key retrieval failure inside the original authorizati
 attempt. It retries only the key GET, preserves the existing trust deadline and
 parent-revocation checks, and does not replay application commands. No per-service
 configuration is needed; npm publication and downstream updates are separate steps.
+
+## Service access and approved source reads (3.0.47+)
+
+Use the [Service access walkthrough](https://github.com/uns-openhub/uns-kit/blob/master/docs/catalog-publication-access.md)
+and [complete catalog project](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/catalog-summary)
+for a derived result over protected UNS history. They include the shipped
+`service-access.json`, administrator source/output/audience review,
+`CatalogPublicationClient`, `catalogPublicationHandler`, signed route registration
+and the existing JWT/JWKS guard. The service credential and incoming user's
+credential have separate roles; users can execute an approved operation without
+direct source access. A background reader uses only its reviewed service identity.
+OpenHub API scopes do not configure MQTT broker ACLs.
+
+The data offer example below uses in-memory rows to explain catalog registration.
+Use the mediated handler in the complete project when reading a protected source.
+Both projects are also bundled in `@uns-kit/core/dist/runtime/service-access-examples/`.
 
 ## Installation
 

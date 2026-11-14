@@ -9,6 +9,16 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.48 - Checked Service access documentation and examples
+
+This patch clarifies existing 3.0.47 contracts; no new permission mode or automatic
+application migration is introduced. Follow the
+[source walkthrough](https://github.com/uns-openhub/uns-kit/blob/master/docs/catalog-publication-access.md)
+or bundled `@uns-kit/core/runtime/service-access-guide.md` and complete projects in
+`dist/runtime/service-access-examples/`. Examples use a rotating token provider;
+background API reads, caller-mediated catalogs and MQTT ACLs are separate.
+An application adopting the capability must still follow the 3.0.47 entry below.
+
 ## 3.0.47 - Common Service access and publications
 
 When crossing `<3.0.47` to `>=3.0.47`, adoption is explicit; existing endpoint authorization and caller forwarding do

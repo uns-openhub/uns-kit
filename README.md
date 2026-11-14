@@ -35,6 +35,12 @@ pnpm run dev
 ```
 
 For more templates and configure options see [`@uns-kit/cli`](packages/uns-cli).
+For reviewed service credentials, start with the
+[Service access walkthrough](docs/catalog-publication-access.md) and
+[runnable background-reader and catalog projects](examples/service-access/README.md).
+They cover package declarations, administrator review, rotating service tokens,
+caller context and expected 403 responses. OpenHub API permissions and MQTT broker
+ACLs are separate; a service without a catalog needs no human caller token.
 For producer-side schema metadata examples, including relationship evidence and
 lifecycle roles, see [`docs/schema-system-metadata.md`](docs/schema-system-metadata.md).
 For the shared Controller/SDK/application boundary, standalone lifecycle and

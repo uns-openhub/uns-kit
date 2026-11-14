@@ -8,10 +8,10 @@ Note: Apps built with uns-kit are intended to be managed by the **UNS OpenHub co
 
 | Package | Description |
 | --- | --- |
-| [`@uns-kit/core`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-core) | Base runtime (UnsProxyProcess, MQTT helpers, config tooling, gRPC gateway). |
-| [`@uns-kit/api`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-api) | Express plugin — HTTP endpoints, JWT/JWKS auth, Swagger, UNS metadata. |
-| [`@uns-kit/cron`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cron) | Cron-driven scheduler that emits UNS events on a fixed cadence. |
-| [`@uns-kit/cli`](https://github.com/uns-openhub/uns-kit/tree/main/packages/uns-cli) | CLI for scaffolding new UNS applications. |
+| [`@uns-kit/core`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-core) | Base runtime (UnsProxyProcess, MQTT helpers, config tooling, gRPC gateway). |
+| [`@uns-kit/api`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-api) | Express plugin — HTTP endpoints, JWT/JWKS auth, Swagger, UNS metadata. |
+| [`@uns-kit/cron`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-cron) | Cron-driven scheduler that emits UNS events on a fixed cadence. |
+| [`@uns-kit/cli`](https://github.com/uns-openhub/uns-kit/tree/master/packages/uns-cli) | CLI for scaffolding new UNS applications. |
 
 ## Prerequisites
 
@@ -37,7 +37,13 @@ pnpm run dev
 
 The scaffold creates a project directory from the default TypeScript template, pins `@uns-kit/core` to the current version, initialises a git repository if `git` is available, and marks the package as a controller-installable UNS OpenHub add-on in `package.json`.
 
-The default template includes a Datahub REST client example (`UnsClient`) for last-value lookups, using a token-first pattern suitable for long-lived service tokens.
+The default template includes a Datahub REST client example (`UnsClient`) using
+`ServiceTokenProvider`, which picks up the Controller's rotating service
+credential on each request. Its README and agent guidance link to the
+[Service access walkthrough](https://github.com/uns-openhub/uns-kit/blob/master/docs/catalog-publication-access.md)
+and complete background-reader/catalog projects shipped with core. Declare the
+required rights, have an administrator review them under Service access, then
+start the prepared release. API scopes and MQTT broker ACLs are separate.
 
 ### Create from a service bundle
 
