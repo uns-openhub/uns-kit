@@ -28,6 +28,18 @@ for (const asset of ["retained-store-job.mjs", "retained-store-job.d.mts", "reta
 }
 fs.copyFileSync(path.resolve("../../docs/retained-store-adoption.md"), path.resolve("dist/runtime/retained-store-guide.md"));
 fs.copyFileSync(path.resolve("../../docs/catalog-publication-access.md"), path.resolve("dist/runtime/service-access-guide.md"));
+const serviceExamples = path.resolve("dist/runtime/service-access-examples");
+fs.rmSync(serviceExamples, { recursive: true, force: true });
+fs.mkdirSync(serviceExamples, { recursive: true });
+fs.copyFileSync(path.resolve("../../examples/service-access/README.md"), path.join(serviceExamples, "README.md"));
+// Explicit assets only: never bundle a developer's ignored config, .env or node_modules.
+for (const [name, module] of [["background-reader", "reader.mjs"], ["catalog-summary", "offer.mjs"]]) {
+  for (const asset of ["package.json", "service-access.json", "config-example.json", "README.md", "build.mjs", ".gitignore", "src/index.mjs", `src/${module}`]) {
+    const target = path.join(serviceExamples, name, asset);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(path.resolve("../../examples/service-access", name, asset), target);
+  }
+}
 const retainedExamples = path.resolve("dist/runtime/retained-store-examples");
 fs.mkdirSync(retainedExamples, { recursive: true });
 for (const name of ["measurement-worker.manifest.json", "index-worker.manifest.json"]) {

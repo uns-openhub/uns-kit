@@ -101,14 +101,12 @@ asset path and `asset` is the leaf sub-asset.
 `UnsClient` provides a minimal REST client for the UNS OpenHub API, including the batch last-value endpoint. Prefer the controller-managed token file or a development machine token; do not place it in a tracked config file.
 
 ```ts
-import { ConfigFile, ServiceTokenProvider, UnsClient } from "@uns-kit/core";
+import { ServiceTokenProvider, UnsClient } from "@uns-kit/core";
 
-const config = await ConfigFile.loadConfig();
-
-const tokenProvider = new ServiceTokenProvider({
-  configToken: typeof config.uns.token === "string" ? config.uns.token : undefined,
-});
-const client = new UnsClient("https://datahub.example.com", {
+const tokenProvider = new ServiceTokenProvider();
+const baseUrl = process.env.UNS_CONTROLLER_PUBLIC_BASE;
+if (!baseUrl) throw new Error("Set the trusted Controller base URL.");
+const client = new UnsClient(baseUrl, {
   tokenProvider,
 });
 
@@ -116,8 +114,25 @@ const values = await client.lastValue([
   "raw/data/line-1/motor/main/temperature",
   "raw/data/line-1/motor/main/status",
 ]);
-console.log(values);
+// Process values without logging credentials or private records.
 ```
+
+Before a managed background reader starts, ship `service-access.json`, reference
+it with `package.json` `unsDatahub.serviceAccess`, retain it in the built package,
+and have an administrator apply its exact-release scopes and UNS paths in
+**Micro services → instance → Service access**. A declaration requests rights;
+it never grants them. A background API reader needs `read:uns` plus its permitted
+paths and no human caller. Catalog-mediated reads require the separate reviewed
+publication and incoming caller context.
+
+Use the [complete developer walkthrough](https://github.com/uns-openhub/uns-kit/blob/master/docs/catalog-publication-access.md)
+and runnable projects shipped in
+`node_modules/@uns-kit/core/dist/runtime/service-access-examples/`.
+The provider reads `UNS_SERVICE_TOKEN_FILE` for every request; do not capture a
+bearer once at startup or fall back after a configured file fails. For direct
+host development use an approved machine credential through `UNS_SERVICE_TOKEN`
+in the untracked local environment. Do not invent managed RTT launch variables.
+MQTT username/password and broker ACLs remain separate from these API rights.
 
 ## Next Steps
 

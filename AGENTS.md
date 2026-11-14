@@ -4,6 +4,7 @@
 - Default deliverable for PR-related work here is a clear, ready-to-use git commit message (and the code changes), not opening a PR.
 - Hosting: `uns-kit` is on GitHub. Other UNS projects may still live on Azure DevOps, so avoid assuming Azure DevOps PR tooling applies here.
 - Shared runtime architecture:
+  - For service identity/access work, start with `docs/catalog-publication-access.md` and the runnable `examples/service-access/` projects. Keep background API access, caller-mediated publications and MQTT ACLs distinct. Verify checked examples with `pnpm run test:service-access-examples` after the SDK build; this does not authorize live grants or production deployment.
   - UNS Kit owns reusable capability/protocol schemas, common validation, identity rules and runtime helpers. Controller owns generic authenticated orchestration, durable platform state and recovery; applications own business parsing, profiles, mappings, topics and units.
   - New applications or groups using an already supported capability must work through declarations and reviewed configuration, without a package-name branch or business-specific change in Controller. Verify a second unrelated application with different selectors/resources.
   - Put a missing reusable contract/helper in this SDK first, then integrate the generic host and consumers. Do not copy validators between repositories or execute application code to inspect or authorize capabilities.

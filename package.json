@@ -46,7 +46,8 @@
     "ts:core:pull-request": "pnpm --filter @uns-kit/core build && pnpm exec tsx packages/uns-core/src/tools/pull-request.ts",
     "ts:core:sync-uns-metadata": "pnpm --filter @uns-kit/core build && pnpm exec tsx packages/uns-core/src/tools/sync-uns-metadata.ts",
     "ts:core:sync-uns-schema": "pnpm exec tsx packages/uns-core/src/tools/sync-uns-schema.ts",
-    "ts:pack:check": "node ./scripts/check-package-artifacts.cjs"
+    "ts:pack:check": "node ./scripts/check-package-artifacts.cjs",
+    "test:service-access-examples": "node scripts/check-service-access-examples.mjs"
   },
   "author": "Aljosa Vister",
   "license": "MIT",

@@ -1,0 +1,23 @@
+{
+  "infra": {
+    "host": "localhost"
+  },
+  "uns": {
+    "processName": "example-catalog-summary",
+    "instanceMode": "wait",
+    "handover": false,
+    "jwksWellKnownUrl": "http://localhost:3200/api/.well-known/jwks.json"
+  },
+  "mqtt": {
+    "username": {
+      "provider": "env",
+      "key": "MQTT_USERNAME",
+      "default": ""
+    },
+    "password": {
+      "provider": "env",
+      "key": "MQTT_PASSWORD",
+      "default": ""
+    }
+  }
+}

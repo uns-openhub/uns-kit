@@ -1,0 +1,65 @@
+{
+  "protocol": 1,
+  "permissions": {
+    "scopes": [],
+    "accessRules": []
+  },
+  "publications": {
+    "protocol": 1,
+    "operations": [
+      {
+        "id": "sample-count",
+        "title": "Temperature sample count",
+        "method": "GET",
+        "path": "/api/example/public/line-1/equipment/dataset/sample-count/json",
+        "mode": "approved-service",
+        "requestSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from",
+            "to"
+          ],
+          "properties": {
+            "from": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "to": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "responseSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "count",
+            "hasMore"
+          ],
+          "properties": {
+            "count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "hasMore": {
+              "type": "boolean"
+            }
+          }
+        },
+        "sources": [
+          {
+            "id": "temperature",
+            "kind": "history",
+            "topic": "example/private/line-1/equipment/main/temperature",
+            "maxWindowMs": 3600000,
+            "maxRows": 1000
+          }
+        ],
+        "timeoutMs": 10000,
+        "maxResponseBytes": 4096
+      }
+    ]
+  }
+}

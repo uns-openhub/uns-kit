@@ -1,0 +1,22 @@
+{
+  "infra": {
+    "host": "localhost"
+  },
+  "uns": {
+    "processName": "example-background-reader",
+    "instanceMode": "wait",
+    "handover": false
+  },
+  "mqtt": {
+    "username": {
+      "provider": "env",
+      "key": "MQTT_USERNAME",
+      "default": ""
+    },
+    "password": {
+      "provider": "env",
+      "key": "MQTT_PASSWORD",
+      "default": ""
+    }
+  }
+}
