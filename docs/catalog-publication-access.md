@@ -69,13 +69,18 @@ grant one. Requirements and paths are normalized for stable digests. For a
 second service, `/input/pressure` can resolve `warehouse/pumps/pump-7` under the
 separate ceiling `warehouse/pumps/#` using the same helper.
 
+SDK 3.0.52 and newer also reject pointers through known credential field names,
+including case and separator variants such as `/uns/token`, `/mqtt/PASSWORD` and
+`/api/client_secret`. This conservative guard is not general secret detection:
+declare only ordinary, non-secret configuration fields as source topics.
+
 `configuredServiceAccessDigest` and `configuredUnsRequestDigest` digest normalized
 contract/request data. The host still binds its review to the exact artifact,
 full config, identity, revision and any publication approvals. A digest or newly
 rotated token alone does not fence an old process. `read:uns` is API authority;
 it never configures MQTT broker ACLs or external database permissions.
 
-### Configured catalog source (SDK 3.0.51; Controller support pending)
+### Configured catalog source (SDK 3.0.52; Controller support pending)
 
 The [configured catalog example](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/configured-catalog)
 declares a bounded operation whose history source includes, for example:

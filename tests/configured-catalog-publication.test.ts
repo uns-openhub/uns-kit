@@ -79,6 +79,22 @@ describe("configured catalog bindings", () => {
       }),
     ).toThrow();
   });
+  it.each([
+    "/uns/token",
+    "/mqtt/PASSWORD",
+    "/nested/client_secret/topic",
+    "/auth/access-token",
+    "/a/credentials/url",
+    "/security/private-key-file",
+    "/configs~1SECRET/source",
+    "/auth.api-key/value",
+  ])("rejects credential pointers in catalog sources: %s", (pointer) => {
+    const publications = { protocol: 2, operations: [{ ...operation, sources: [{ ...source, topicFromConfig: pointer }] }] };
+    expect(() => parseConfiguredServiceAccessDeclaration({ ...declaration, publications })).toThrow("configured_access_pointer_sensitive");
+    expect(() => resolveConfiguredCatalogPublicationManifest(publications, { source: { topic: "plant/forecast" } })).toThrow(
+      "configured_access_pointer_sensitive",
+    );
+  });
   it("rejects both a literal and pointer, duplicate source IDs and extra declaration fields", () => {
     for (const sources of [[{ ...source, topic: "other/private" }], [source, source], [{ ...source, extra: true }]])
       expect(() =>

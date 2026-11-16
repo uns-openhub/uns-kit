@@ -4,6 +4,7 @@ This Node 22+ example declares an exact JSON Pointer `/source/topic` in
 `package.json.unsDatahub.serviceAccess`. `config-example.json` supplies the
 concrete source. The worker and the review helper read that same field. The
 example declaration limits the requested topic to `example/configured/#`.
+Use SDK 3.0.52 or newer to reject pointers through known credential fields.
 
 **Controller support is not implemented yet.** The SDK only derives a proposal;
 it does not create an identity or grant access. Do not deploy this protocol-2

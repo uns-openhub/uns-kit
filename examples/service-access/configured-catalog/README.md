@@ -20,3 +20,4 @@ MQTT credentials and broker ACLs are separate.
 The startup helper resolves the **raw** config, before secret resolution. Missing,
 secret references, wildcards and non-exact source topics are rejected. `SIGINT`
 and `SIGTERM` still shut down the runtime without Controller participation.
+Use SDK 3.0.52 or newer to reject pointers through known credential fields.

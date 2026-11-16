@@ -69,6 +69,40 @@ describe("configured service access protocol 2", () => {
     expect(getter).not.toHaveBeenCalled();
   });
   it.each([
+    "/uns/token",
+    "/mqtt/PASSWORD",
+    "/nested/client_secret/topic",
+    "/auth/access-token",
+    "/service/API_KEY",
+    "/security/private-key-file",
+    "/data/credentials/url",
+    "/a/secret_access_key",
+    "/a/dbPasswordRef",
+    "/bearer",
+    "/a/connection_string",
+    "/configs~1SECRET/source",
+    "/auth.api-key/value",
+    "/infra/ACCESS_KEY_ID",
+    "/encryption-key",
+  ])("rejects a known credential field at any pointer depth: %s", (topicFromConfig) => {
+    const d = { ...declaration, requirements: [{ ...declaration.requirements[0], topicFromConfig }] };
+    expect(() => parseConfiguredServiceAccessDeclaration(d)).toThrow("configured_access_pointer_sensitive");
+    expect(() => deriveConfiguredUnsAccess(d, { source: { topic: "factory/line-1/temperature" } })).toThrow("configured_access_pointer_sensitive");
+  });
+  it("allows ordinary configuration names that merely resemble credential names", () => {
+    for (const key of ["tokenizer", "tokenRate", "secretary", "sourceTopic"]) {
+      const d = { protocol: 2, requirements: [{ id: "x", capability: "read:uns", topicFromConfig: `/sources/${key}` }] };
+      expect(deriveConfiguredUnsAccess(d, { sources: { [key]: "plant/line" } }).policy.accessRules).toEqual(["plant/line"]);
+    }
+  });
+  it("rejects a credential pointer before reading its value", () => {
+    const getter = vi.fn(() => "secret-looking-like-topic");
+    const config = { uns: { get token() { return getter(); } } };
+    const d = { protocol: 2, requirements: [{ id: "x", capability: "read:uns", topicFromConfig: "/uns/token" }] };
+    expect(() => deriveConfiguredUnsAccess(d, config)).toThrow("configured_access_pointer_sensitive");
+    expect(getter).not.toHaveBeenCalled();
+  });
+  it.each([
     {},
     { source: [] },
     { source: { topic: null } },
@@ -96,8 +130,18 @@ describe("configured service access protocol 2", () => {
       expect(String(error)).toContain("configured_access_rule_invalid");
     }
     expect(() => deriveConfiguredUnsAccess(declaration, { source: { topic: "a".repeat(513) } })).toThrow();
-    expect(() => parseConfiguredServiceAccessDeclaration({ protocol: 2, requirements: [{ id: "x", capability: "read:uns", topicFromConfig: "/" + "a".repeat(512) }] })).toThrow();
-    expect(() => parseConfiguredServiceAccessDeclaration({ protocol: 2, requirements: [{ id: "x", capability: "read:uns", topicFromConfig: "/a", maxAccessRules: Array(65).fill("plant/#") }] })).toThrow();
+    expect(() =>
+      parseConfiguredServiceAccessDeclaration({
+        protocol: 2,
+        requirements: [{ id: "x", capability: "read:uns", topicFromConfig: "/" + "a".repeat(512) }],
+      }),
+    ).toThrow();
+    expect(() =>
+      parseConfiguredServiceAccessDeclaration({
+        protocol: 2,
+        requirements: [{ id: "x", capability: "read:uns", topicFromConfig: "/a", maxAccessRules: Array(65).fill("plant/#") }],
+      }),
+    ).toThrow();
   });
   it.each([
     { protocol: 3, requirements: [] },
