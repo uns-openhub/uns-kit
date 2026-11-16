@@ -567,8 +567,9 @@ export interface ApiChatDefaults {
 }
 
 export interface IApiProxyOptions {
-  /** Fresh principal-status endpoint for operator operations. Controller-managed
-   * runtimes default to their configured controller origin. No bearer is exposed. */
+  /** Fresh principal-status endpoint for operator operations and managed service
+   * tokens on authenticated routes. Controller-managed runtimes default to their
+   * configured controller origin. No bearer is exposed. */
   operatorAuthorizationStatusUrl?: string;
   operatorJwksUrl?: string;
   jwtSecret?: string;

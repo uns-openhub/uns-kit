@@ -40,6 +40,16 @@ credential have separate roles; users can execute an approved operation without
 direct source access. A background reader uses only its reviewed service identity.
 OpenHub API scopes do not configure MQTT broker ACLs.
 
+Starting with 3.0.53, authenticated routes also check a managed service token's
+current authorization with the Controller on every request. This prevents a
+previously approved configuration from continuing to use an old token after its
+access changes. The Controller supplies the status URL to managed services. If
+the Controller is unreachable or does not support configured-access authority,
+these requests fail closed with HTTP 503. Ordinary user-token routes are unchanged.
+The application must still check any business-specific rules itself. Custom
+`registerCatchAll` handlers implement their own authentication and must perform
+the same current-authorization check when accepting service tokens.
+
 The data offer example below uses in-memory rows to explain catalog registration.
 Use the mediated handler in the complete project when reading a protected source.
 Both projects are also bundled in `@uns-kit/core/dist/runtime/service-access-examples/`.

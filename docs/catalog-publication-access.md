@@ -16,6 +16,13 @@ The Controller stores that decision, issues the instance credential and supplies
 its file path. The SDK reads the current credential when making a request. The UI
 is not a place to copy a bearer token into application code.
 
+SDK 3.0.53 also checks managed service tokens presented to authenticated SDK
+routes against the Controller on every request. If the approved configuration
+changes, the old token is rejected. If the status check is unavailable or the
+Controller lacks configured-access authority, the request fails closed. Custom
+catch-all handlers own their authentication and must make this check themselves;
+the SDK cannot protect a handler that bypasses its authenticated routes.
+
 ## Configured paths: protocol 2 (SDK only)
 
 Starting with SDK 3.0.50 a background service can declare a fixed JSON Pointer
