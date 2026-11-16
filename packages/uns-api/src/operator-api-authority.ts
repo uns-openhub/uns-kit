@@ -31,6 +31,14 @@ export function operatorEndpointDeclarations(
   return parsed;
 }
 
+/** Only signed claims are passed here. Any managed-service hint must be
+ * checked even when an ordinary endpoint has no operator declaration. */
+export function hasServiceAuthorizationHint(claims: Record<string, unknown>): boolean {
+  return ["serviceToken", "machineIdentityId", "machineIdentityName", "workloadIdentityType",
+    "configuredService", "configuredServiceLaunch", "configuredAccess", "catalogPublication", "catalogLaunch", "runtimeRouteDeployment"]
+    .some(key => Object.hasOwn(claims, key)) || claims["identityType"] === "machine";
+}
+
 /** Route callbacks pass claims only after the existing JWT/JWKS/path checks.
  * Delegated authority is bound again here, inside the application process. */
 export class OperatorApiAuthority {
@@ -51,8 +59,10 @@ export class OperatorApiAuthority {
     query?: Record<string, unknown>;
   }): Promise<OperatorOperation | undefined> {
     const delegated = input.claims[OPERATOR_DELEGATION_CLAIM] !== undefined;
+    const service = !delegated && hasServiceAuthorizationHint(input.claims);
     if (!input.declarations.length) {
       if (delegated) throw new OperatorApiError("operator_endpoint_not_declared", 403);
+      if (service) await this.currentAuthorization(input.authorization, true);
       return undefined;
     }
     const roles = [input.claims["role"], ...(Array.isArray(input.claims["roles"]) ? input.claims["roles"] : [])];
@@ -85,54 +95,73 @@ export class OperatorApiAuthority {
     }
     // A standalone, locally verified native operator token can remain offline.
     // Delegated machine authority always requires a fresh parent-status check.
-    if (this.options.statusUrl) await this.currentAuthorization(input.authorization);
+    if (service || this.options.statusUrl) await this.currentAuthorization(input.authorization, service);
     return operation;
   }
 
-  private async currentAuthorization(authorization: string): Promise<void> {
-    if (this.pending >= 4) throw new OperatorApiError("operator_authorization_capacity", 503);
+  private async currentAuthorization(authorization: string, service = false): Promise<void> {
+    if (!this.options.statusUrl)
+      throw new OperatorApiError(service ? "service_authorization_status_required" : "operator_authorization_status_required", 503);
+    if (this.pending >= 16) throw new OperatorApiError("operator_authorization_capacity", 503);
     this.pending++;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1000);
+    // Keep the slot occupied until the underlying request settles, even if a
+    // custom fetch implementation ignores abort. The caller still gets a
+    // bounded response and stuck requests cannot accumulate without limit.
+    const work = this.probeAuthorization(authorization, service, controller.signal)
+      .finally(() => { this.pending--; });
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const response = await (this.options.fetch ?? fetch)(this.options.statusUrl!, {
-        method: "POST",
-        headers: { authorization },
-        signal: controller.signal,
-        redirect: "error",
-      });
-      if (response.status === 401 || response.status === 403) throw new OperatorApiError("operator_authorization_inactive", 403);
-      if (!response.ok || Number(response.headers.get("content-length") ?? 0) > 4096)
-        throw new OperatorApiError("operator_authorization_unavailable", 503);
-      if (!response.body) throw new OperatorApiError("operator_authorization_unavailable", 503);
-      const reader = response.body.getReader();
-      let length = 0,
-        body = "";
-      try {
-        const decoder = new TextDecoder();
-        while (true) {
-          const part = await reader.read();
-          if (part.done) break;
-          length += part.value.byteLength;
-          if (length > 4096) {
-            await reader.cancel();
-            throw new OperatorApiError("operator_authorization_unavailable", 503);
-          }
-          body += decoder.decode(part.value, { stream: true });
-        }
-        body += decoder.decode();
-      } finally {
-        reader.releaseLock();
-      }
-      const status = JSON.parse(body);
-      if (status.active !== true || status.protocolVersion !== 1) throw new OperatorApiError("operator_authorization_inactive", 403);
+      await Promise.race([work, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new OperatorApiError("operator_authorization_unavailable", 503));
+        }, 1000);
+      })]);
     } catch (error) {
       if (error instanceof OperatorApiError) throw error;
       throw new OperatorApiError("operator_authorization_unavailable", 503);
     } finally {
       controller.abort();
-      clearTimeout(timer);
-      this.pending--;
+      if (timer) clearTimeout(timer);
     }
+  }
+
+  private async probeAuthorization(authorization: string, service: boolean, signal: AbortSignal): Promise<void> {
+    const response = await (this.options.fetch ?? fetch)(this.options.statusUrl!, {
+      method: "POST",
+      headers: { authorization },
+      signal,
+      redirect: "error",
+    });
+    if (response.status === 401 || response.status === 403) throw new OperatorApiError("operator_authorization_inactive", 403);
+    if (!response.ok || Number(response.headers.get("content-length") ?? 0) > 4096)
+      throw new OperatorApiError("operator_authorization_unavailable", 503);
+    if (!response.body) throw new OperatorApiError("operator_authorization_unavailable", 503);
+    const reader = response.body.getReader();
+    let length = 0,
+      body = "";
+    try {
+      const decoder = new TextDecoder();
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        length += part.value.byteLength;
+        if (length > 4096) {
+          await reader.cancel();
+          throw new OperatorApiError("operator_authorization_unavailable", 503);
+        }
+        body += decoder.decode(part.value, { stream: true });
+      }
+      body += decoder.decode();
+    } finally {
+      reader.releaseLock();
+    }
+    const status = JSON.parse(body);
+    if (status.active !== true || status.protocolVersion !== 1) throw new OperatorApiError("operator_authorization_inactive", 403);
+    // An older Controller can claim a token is active without checking its
+    // configured decision. Never let that response authorize a service token.
+    if (service && (status.principalType !== "machine" || status.configuredAccessAuthority !== 2))
+      throw new OperatorApiError("service_authorization_unavailable", 503);
   }
 }

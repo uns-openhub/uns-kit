@@ -9,6 +9,15 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.53 - Current authorization for service tokens
+
+Authenticated `@uns-kit/api` routes now check a managed service token with the
+Controller on every request. Use a Controller that advertises
+`configuredAccessAuthority: 2`; unavailable or older authorities fail closed.
+Managed runtimes receive the status endpoint automatically. Standalone runtimes
+can configure `operatorAuthorizationStatusUrl`. Ordinary user tokens and
+application-owned catch-all authentication are unchanged.
+
 ## 3.0.52 - Reject credential-field pointers
 
 Configured direct UNS and catalog source pointers reject known credential-field
