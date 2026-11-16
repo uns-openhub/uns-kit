@@ -6,6 +6,7 @@ import UnsApiProxy from "../src/uns-api-proxy.js";
 
 const keys = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const jwk = { ...keys.publicKey.export({ format: "jwk" }), kid: "service-http-fixture", alg: "RS256", use: "sig" };
+const hmacSecret = "local-service-api-test-secret";
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
 
@@ -18,7 +19,7 @@ async function listen(server: Server): Promise<string> {
   return `http://127.0.0.1:${(server.address() as {port:number}).port}`;
 }
 
-async function fixture(withStatus = true) {
+async function fixture(withStatus = true, authentication: "jwks" | "hmac" = "jwks") {
   let mode: "active" | "revoked" | "unavailable" | "old-controller" | "wrong-principal" = "active";
   let checks = 0, effects = 0;
   const authority = await listen(createServer((req, res) => {
@@ -33,7 +34,7 @@ async function fixture(withStatus = true) {
       principalType: mode === "wrong-principal" ? "user" : "machine" }));
   }));
   const proxy: any = new UnsApiProxy("service-fixture", "ordinary", {
-    jwks: {wellKnownJwksUrl: authority + "/jwks"},
+    ...(authentication === "jwks" ? {jwks: {wellKnownJwksUrl: authority + "/jwks"}} : {jwtSecret:hmacSecret}),
     // Empty explicitly disables inherited controller configuration for this case.
     operatorAuthorizationStatusUrl: withStatus ? authority + "/status" : "",
   });
@@ -48,6 +49,7 @@ async function fixture(withStatus = true) {
     proxy.event.on(event, ({res}: any) => { effects++; res.json({ok:true}); });
   return {
     url: `http://127.0.0.1:${proxy.app.server.address().port}/api/example/plant/equipment/main/value`,
+    path: "example/plant/equipment/main/value",
     setMode: (value: typeof mode) => {mode=value;}, checks: () => checks, effects: () => effects,
   };
 }
@@ -60,9 +62,37 @@ const request = (url:string, method:string, bearer:string) => fetch(url, {method
   ...(method === "GET" ? {} : {body:"{}"})});
 
 describe("managed service tokens on ordinary SDK HTTP endpoints", () => {
-  it("rechecks every method and rejects a token immediately after its authority changes", async () => {
-    const f=await fixture(), bearer=token({serviceToken:true,machineIdentityId:randomUUID(),
-      configuredService:{protocol:2,operationId:randomUUID()}});
+  it.each(["#", "example/plant/equipment/main/value"])("rejects a current v2 UNS bearer with rule %s on every normal method", async (rule) => {
+    const f=await fixture(), id=randomUUID(), bearer=token({sub:id,serviceToken:true,machineIdentityId:id,identityType:"machine",
+      scopes:["read:uns"],accessRules:[rule],configuredService:{protocol:2,operationId:randomUUID()}});
+    for (const method of ["GET","POST","PUT","PATCH","DELETE"]) {
+      const response=await request(f.url,method,bearer);
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({error:"service_api_permission_required"});
+    }
+    expect(f.effects()).toBe(0);
+  });
+
+  it("also rejects a signed v2 UNS bearer on HMAC-authenticated routes", async () => {
+    const f=await fixture(true,"hmac"), id=randomUUID();
+    const bearer=jwt.sign({sub:id,serviceToken:true,machineIdentityId:id,scopes:["read:uns"],accessRules:[f.path],
+      configuredService:{protocol:2,operationId:randomUUID()}},hmacSecret,{algorithm:"HS256",expiresIn:60});
+    for (const method of ["GET","POST","PUT","PATCH","DELETE"]) {
+      expect((await request(f.url,method,bearer)).status).toBe(403);
+    }
+    expect(f.effects()).toBe(0);
+  });
+
+  it("fails closed for any signed configuredService claim, even a malformed one", async () => {
+    const f=await fixture();
+    for (const configuredService of [null,{}, {protocol:3}, "invalid"]) {
+      expect((await request(f.url,"GET",token({serviceToken:true,machineIdentityId:randomUUID(),configuredService}))).status).toBe(403);
+    }
+    expect(f.effects()).toBe(0);
+  });
+
+  it("keeps v1 machine token rechecks and rejects it after its authority changes", async () => {
+    const f=await fixture(), bearer=token({serviceToken:true,machineIdentityId:randomUUID(),scopes:["read:uns"]});
     for (const method of ["GET","POST","PUT","PATCH","DELETE"]) {
       expect((await request(f.url,method,bearer)).status).toBe(200);
       f.setMode("revoked");
@@ -90,20 +120,26 @@ describe("managed service tokens on ordinary SDK HTTP endpoints", () => {
     expect(f.effects()).toBe(8);
   });
 
-  it("protects configured-only and legacy machine claims but leaves ordinary user routes unchanged", async () => {
+  it("protects legacy machine claims but leaves ordinary user routes unchanged", async () => {
     const f=await fixture();
-    for (const claims of [{configuredService:{protocol:2}}, {serviceToken:true}, {machineIdentityId:randomUUID()}]) {
+    for (const claims of [{serviceToken:true}, {machineIdentityId:randomUUID()}]) {
       f.setMode("revoked");
       expect((await request(f.url,"GET",token(claims))).status).toBe(403);
     }
     f.setMode("unavailable");
-    expect((await request(f.url,"GET",token({roles:["user"]}))).status).toBe(200);
-    expect(f.checks()).toBe(3);
+    for (const role of ["user","admin"]) {
+      const bearer=token({roles:[role]});
+      for (const method of ["GET","POST","PUT","PATCH","DELETE"])
+        expect((await request(f.url,method,bearer)).status).toBe(200);
+    }
+    expect(f.checks()).toBe(2);
+    expect(f.effects()).toBe(10);
   });
 
   it("does not serve a managed service token if no status endpoint is configured", async () => {
     const f=await fixture(false);
-    expect((await request(f.url,"GET",token({configuredService:{protocol:2}}))).status).toBe(503);
+    expect((await request(f.url,"GET",token({configuredService:{protocol:2}}))).status).toBe(403);
+    expect((await request(f.url,"GET",token({serviceToken:true,machineIdentityId:randomUUID()}))).status).toBe(503);
     expect((await request(f.url,"GET",token({roles:["user"]}))).status).toBe(200);
     expect(f.effects()).toBe(1);
   });

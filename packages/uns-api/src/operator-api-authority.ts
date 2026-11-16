@@ -59,6 +59,11 @@ export class OperatorApiAuthority {
     query?: Record<string, unknown>;
   }): Promise<OperatorOperation | undefined> {
     const delegated = input.claims[OPERATOR_DELEGATION_CLAIM] !== undefined;
+    // Configured Service access grants UNS resources, not ordinary service API
+    // operations. Match only verified claims; the separately verified Operator
+    // delegation keeps its purpose-bound route and authorization checks below.
+    if (!delegated && Object.hasOwn(input.claims, "configuredService"))
+      throw new OperatorApiError("service_api_permission_required", 403);
     const service = !delegated && hasServiceAuthorizationHint(input.claims);
     if (!input.declarations.length) {
       if (delegated) throw new OperatorApiError("operator_endpoint_not_declared", 403);
