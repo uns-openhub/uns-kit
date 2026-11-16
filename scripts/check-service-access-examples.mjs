@@ -41,9 +41,10 @@ try {
     ["background-reader", "reader.mjs"],
     ["configured-reader", "reader.mjs"],
     ["catalog-summary", "offer.mjs"],
+    ["configured-catalog", "offer.mjs"],
   ]) {
     const dir = path.join(examples, name);
-    const declaration = await (name === "configured-reader" ? loadConfiguredServiceAccessDeclaration : loadServiceAccessDeclaration)(path.join(dir, "package.json"));
+    const declaration = await (name.startsWith("configured-") ? loadConfiguredServiceAccessDeclaration : loadServiceAccessDeclaration)(path.join(dir, "package.json"));
     if (!declaration) throw new Error(`${name}: missing declaration`);
     for (const file of ["index.mjs", module]) run("node", ["--check", path.join(dir, "src", file)], consumer);
     run("node", ["build.mjs"], dir);

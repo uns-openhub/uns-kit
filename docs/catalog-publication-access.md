@@ -22,8 +22,9 @@ Starting with SDK 3.0.50 a background service can declare a fixed JSON Pointer
 to its configured UNS path. This is an opt-in **request**, not a permission.
 Controller 2.2.98 does not implement this protocol: wait for explicit host
 capability support, administrator review and loaded-configuration fencing before
-deploying it. Protocol 1 and its existing approvals stay unchanged. This slice
-does not support catalog source bindings; the catalog example below remains v1.
+deploying it. Protocol 1 and its existing approvals stay unchanged. Configured
+catalog bindings are separately versioned and also require supporting Controller
+and broker behavior; the previously released Controller 2.2.98 does not provide it.
 
 For example, a package's `unsDatahub.serviceAccess` contains:
 
@@ -74,6 +75,40 @@ full config, identity, revision and any publication approvals. A digest or newly
 rotated token alone does not fence an old process. `read:uns` is API authority;
 it never configures MQTT broker ACLs or external database permissions.
 
+### Configured catalog source (SDK 3.0.51; Controller support pending)
+
+The [configured catalog example](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/configured-catalog)
+declares a bounded operation whose history source includes, for example:
+
+```json
+{ "id": "temperature", "kind": "history", "topicFromConfig": "/source/topic", "maxRows": 1000, "maxWindowMs": 3600000 }
+```
+
+The operation remains in `unsDatahub.serviceAccess.publications`, which has its
+own `protocol: 2`. `requirements: []` is valid for a catalog-only service. The
+configured source is an exact topic, not a wildcard, URL or secret reference.
+The Controller must review the resolved operation, source, bounds, response and
+audience; the caller also needs permission for the published operation. This
+request does not grant `read:uns` or raw access to either party.
+
+At startup, the application loads the same unmodified config used in the review:
+
+```js
+import { ConfigFile } from '@uns-kit/core';
+import { loadConfiguredServiceAccessDeclaration } from '@uns-kit/core/runtime/service-access-package.js';
+import { resolveConfiguredCatalogPublicationManifest } from '@uns-kit/core/runtime/configured-service-access.js';
+const declaration = await loadConfiguredServiceAccessDeclaration(new URL('../package.json', import.meta.url));
+if (!declaration?.publications) throw new Error('Catalog declaration missing');
+const manifest = resolveConfiguredCatalogPublicationManifest(declaration.publications, ConfigFile.loadRawConfig());
+// Pass manifest to CatalogPublicationClient; the handler still calls history('temperature').
+```
+
+Use the raw config before resolving secret providers; the configured topic cannot
+be a secret reference. The Controller must independently derive the same manifest
+from trusted configuration and verify that the running process loaded the approved
+revision on every request. The SDK helper alone cannot enforce host authorization,
+approve an operation, or make older Controllers understand this protocol.
+
 ## Choose the access model
 
 | Application activity | Credential used | Administrator approves | Mechanism |
@@ -99,6 +134,7 @@ credential-free configuration, a declaration, build script and package metadata:
 - [Background reader](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/background-reader)
 - [Catalog summary](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/catalog-summary)
 - [Configured background reader (protocol 2; Controller support pending)](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/configured-reader)
+- [Configured catalog (protocol 2; Controller support pending)](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/configured-catalog)
 
 The npm core package also ships this guide at
 `@uns-kit/core/runtime/service-access-guide.md` and the projects under

@@ -3,6 +3,7 @@
 - `background-reader/`: no API or catalog; a reviewed workload token reads one UNS history source.
 - `catalog-summary/`: a catalog-only caller requests a bounded derived count; the workload has no direct source permission.
 - `configured-reader/`: a protocol-2 background reader derives its requested path from configuration; Controller support is still pending.
+- `configured-catalog/`: a protocol-2 catalog derives its private source from configuration; Controller support is still pending.
 
 Each folder is an independent, credential-free Node.js package. Copy one folder
 to a new project, install dependencies and build. The declarations are inline in package.json (SDK 3.0.49+). Deploy/review/start

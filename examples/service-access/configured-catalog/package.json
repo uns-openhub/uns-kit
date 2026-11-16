@@ -1,0 +1,89 @@
+{
+  "name": "example-configured-catalog",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "config-example.json"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@uns-kit/core": "^3.0.51",
+    "@uns-kit/api": "^3.0.51"
+  },
+  "unsDatahub": {
+    "schemaVersion": 1,
+    "kind": "addon",
+    "controllerCompatibility": ">=2 <3",
+    "serviceAccess": {
+      "protocol": 2,
+      "requirements": [],
+      "publications": {
+        "protocol": 2,
+        "operations": [
+          {
+            "id": "sample-count",
+            "title": "Temperature sample count",
+            "method": "GET",
+            "path": "/api/example/public/line-1/equipment/dataset/sample-count/json",
+            "mode": "approved-service",
+            "requestSchema": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "from",
+                "to"
+              ],
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "to": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            },
+            "responseSchema": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "count",
+                "hasMore"
+              ],
+              "properties": {
+                "count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "hasMore": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "sources": [
+              {
+                "id": "temperature",
+                "kind": "history",
+                "maxWindowMs": 3600000,
+                "maxRows": 1000,
+                "topicFromConfig": "/source/topic"
+              }
+            ],
+            "timeoutMs": 10000,
+            "maxResponseBytes": 4096
+          }
+        ]
+      }
+    }
+  }
+}
