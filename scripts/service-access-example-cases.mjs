@@ -1,6 +1,7 @@
 import { buildApiInteractionPath, buildApiInteractionsFromDataOfferSources } from "@uns-kit/api";
 import { CatalogPublicationClient } from "@uns-kit/core/runtime/catalog-publication-client.js";
-import { loadServiceAccessDeclaration } from "@uns-kit/core/runtime/service-access-package.js";
+import { loadConfiguredServiceAccessDeclaration, loadServiceAccessDeclaration } from "@uns-kit/core/runtime/service-access-package.js";
+import { deriveConfiguredUnsAccess, resolveConfiguredCatalogPublicationManifest } from "@uns-kit/core/runtime/configured-service-access.js";
 import { ServiceTokenProvider } from "@uns-kit/core/tools/auth/service-token-provider.js";
 import express from "express";
 import assert from "node:assert/strict";
@@ -13,6 +14,7 @@ import { test } from "node:test";
 import { readHistory, sourceTopic } from "./examples/service-access/background-reader/src/reader.mjs";
 import { readHistory as readConfiguredHistory, sourceTopic as configuredSourceTopic } from "./examples/service-access/configured-reader/src/reader.mjs";
 import { createSummaryOffer } from "./examples/service-access/catalog-summary/src/offer.mjs";
+import { createSummaryOffer as createConfiguredOffer } from "./examples/service-access/configured-catalog/src/offer.mjs";
 
 async function token(t) {
   const dir = await mkdtemp(path.join(tmpdir(), "example-credential-"));
@@ -118,12 +120,16 @@ test("background read propagates local shutdown cancellation", async (t) => {
   await assert.rejects(pending, /cancelled/);
 });
 
-async function catalog(t) {
+async function catalog(t, configured = false) {
   const { provider, file } = await token(t);
   const seen = [];
   let deny = false,
     invalid = false;
-  const declaration = await loadServiceAccessDeclaration("./examples/service-access/catalog-summary/package.json");
+  const declaration = configured
+    ? await loadConfiguredServiceAccessDeclaration("./examples/service-access/configured-catalog/package.json")
+    : await loadServiceAccessDeclaration("./examples/service-access/catalog-summary/package.json");
+  const config = {source:{topic:"example/private/line-1/equipment/main/temperature"}};
+  const manifest = configured ? resolveConfiguredCatalogPublicationManifest(declaration.publications,config) : declaration.publications;
   const base = await listen(t, async (req, res) => {
     const value = await body(req);
     seen.push({ auth: req.headers.authorization, path: req.url, value });
@@ -146,18 +152,29 @@ async function catalog(t) {
     rttNode: "example-catalog-summary",
     version: "1.0.0",
     instanceId: "summary",
-    manifest: declaration.publications,
+    manifest,
     tokenProvider: provider,
   });
-  const offer = createSummaryOffer(client);
+  const offer = (configured ? createConfiguredOffer : createSummaryOffer)(client);
   const routes = buildApiInteractionsFromDataOfferSources({ summary: offer });
-  assert.equal(buildApiInteractionPath(routes.summary), declaration.publications.operations[0].path);
-  assert.deepEqual(declaration.permissions, { scopes: [], accessRules: [] });
+  assert.equal(buildApiInteractionPath(routes.summary), manifest.operations[0].path);
+  if (configured) assert.deepEqual(deriveConfiguredUnsAccess(declaration,config).policy,{scopes:[],accessRules:[]});
+  else assert.deepEqual(declaration.permissions, { scopes: [], accessRules: [] });
   const app = express();
-  app.get(declaration.publications.operations[0].path, (req, res) => offer.handler({ req, res }));
+  app.get(manifest.operations[0].path, (req, res) => offer.handler({ req, res }));
   const service = await listen(t, app);
-  return { url: service + declaration.publications.operations[0].path, seen, file, deny: () => (deny = true), invalid: () => (invalid = true) };
+  return { url: service + manifest.operations[0].path, seen, file, deny: () => (deny = true), invalid: () => (invalid = true) };
 }
+
+test("configured catalog example returns its bounded result without exposing a direct source", async (t) => {
+  const c=await catalog(t,true),headers={Authorization:"Bearer synthetic-reader"};
+  const response=await fetch(c.url+`?from=${from}&to=${to}`,{headers});
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{count:2,hasMore:false});
+  assert.equal(c.seen[1].value.sourceId,"temperature");
+  assert.equal("topic" in c.seen[1].value,false);
+  assert.equal((await fetch(c.url+`?from=${from}&to=${to}&topic=other/private`,{headers})).status,400);
+});
 
 test("catalog example keeps caller/service credentials separate and emits only declared output", async (t) => {
   const c = await catalog(t);

@@ -61,6 +61,9 @@ const operation = z
   })
   .strict();
 const manifest = z.object({ protocol: z.literal(1), operations: z.array(operation).min(1).max(32) }).strict();
+/** Shared field bounds for configured catalog declarations. Semantic operation
+ * and schema validation remains in parseCatalogPublicationManifest. */
+export { historySource as catalogHistorySourceSchema, operation as catalogOperationSchema };
 export type CatalogOperationInput = z.input<typeof operation>;
 export type CatalogOperation = z.output<typeof operation>;
 export type CatalogHistorySource = z.output<typeof historySource>;

@@ -9,6 +9,16 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.51 - Configured catalog source proposal (protocol 2)
+
+Configured Service access can declare catalog publications separately from direct
+UNS reads. `requirements: []` with `publications.protocol: 2` is a catalog-only
+request; `resolveConfiguredCatalogPublicationManifest` resolves exact history
+topics from the raw instance config into the existing protocol-1 broker manifest.
+No `read:uns` scope or catalog approval is created by this SDK. A Controller must
+advertise and implement configured catalog authorization and loaded-revision
+checks before using it. Existing protocol-1 services need no changes.
+
 ## 3.0.50 - Configured UNS access proposal (protocol 2)
 
 This SDK adds an explicit, data-only protocol-2 declaration and helper for deriving
