@@ -1,0 +1,39 @@
+{
+  "name": "example-configured-reader",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "config-example.json"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@uns-kit/core": "^3.0.50"
+  },
+  "unsDatahub": {
+    "schemaVersion": 1,
+    "kind": "addon",
+    "controllerCompatibility": ">=2.2.99 <3",
+    "serviceAccess": {
+      "protocol": 2,
+      "requirements": [
+        {
+          "id": "temperature",
+          "capability": "read:uns",
+          "topicFromConfig": "/source/topic",
+          "maxAccessRules": [
+            "example/configured/#"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -5,14 +5,74 @@ Common Service access also requires a matching Controller; these workflows were
 originally verified with Controller **2.2.95** using file declarations. Inline
 package declarations require a Controller advertising `rttServiceAccessInline`.
 Controller 2.2.96 does not support inline declarations. SDK installation alone
-enables no host rights. The configuration-save approval UI is a separate planned
-Controller change; the approval steps below describe the existing released UI.
+enables no host rights. Host features and approval screens depend on the
+Controller version and advertised capabilities.
 
-The developer declares a permission ceiling and uses the SDK. An administrator
-reviews the installed release in **Micro services → instance → Service access**.
+The developer declares requirements and uses the SDK. An administrator reviews
+the installed release and configuration in **Micro services**. Recent Controllers
+show a read-only effective status in **Service access** and perform approval with
+configuration; older compatible releases may have a separate policy editor.
 The Controller stores that decision, issues the instance credential and supplies
 its file path. The SDK reads the current credential when making a request. The UI
-is a policy editor, not a place to copy a bearer token into application code.
+is not a place to copy a bearer token into application code.
+
+## Configured paths: protocol 2 (SDK only)
+
+Starting with SDK 3.0.50 a background service can declare a fixed JSON Pointer
+to its configured UNS path. This is an opt-in **request**, not a permission.
+Controller 2.2.98 does not implement this protocol: wait for explicit host
+capability support, administrator review and loaded-configuration fencing before
+deploying it. Protocol 1 and its existing approvals stay unchanged. This slice
+does not support catalog source bindings; the catalog example below remains v1.
+
+For example, a package's `unsDatahub.serviceAccess` contains:
+
+```json
+{
+  "protocol": 2,
+  "requirements": [{
+    "id": "temperature",
+    "capability": "read:uns",
+    "topicFromConfig": "/source/topic",
+    "maxAccessRules": ["example/configured/#"]
+  }]
+}
+```
+
+The instance supplies its actual path in `config.json`:
+
+```json
+{ "source": { "topic": "example/configured/line-1/temperature" } }
+```
+
+The application or host can use the same SDK helper; no application code runs as
+part of the host's inspection:
+
+```js
+import { loadConfiguredServiceAccessDeclaration } from "@uns-kit/core/runtime/service-access-package.js";
+import { deriveConfiguredUnsAccess } from "@uns-kit/core/runtime/configured-service-access.js";
+
+const declaration = await loadConfiguredServiceAccessDeclaration(new URL("../package.json", import.meta.url));
+if (!declaration) throw new Error("Service access declaration missing");
+const proposal = deriveConfiguredUnsAccess(declaration, config);
+// proposal.policy: { scopes: ["read:uns"], accessRules: [configured path] }
+```
+
+The declaration accepts at most 32 uniquely named requirements, all initially
+`read:uns`. Each pointer resolves only through own object properties, at most 8
+segments; arrays, missing fields, accessors, secret/reference objects, invalid
+filters and paths outside an optional `maxAccessRules` ceiling are rejected.
+RFC 6901 escaping (`~0`, `~1`) is supported. Wildcards, including `#`, are
+explicit requests and need administrator review; omitting a ceiling does not
+grant one. Requirements and paths are normalized for stable digests. For a
+second service, `/input/pressure` can resolve `warehouse/pumps/pump-7` under the
+separate ceiling `warehouse/pumps/#` using the same helper.
+
+`configuredServiceAccessDigest` and `configuredUnsRequestDigest` digest normalized
+contract/request data. The host still binds its review to the exact artifact,
+full config, identity, revision and any publication approvals. A digest or newly
+rotated token alone does not fence an old process. `read:uns` is API authority;
+it never configures MQTT broker ACLs or external database permissions.
 
 ## Choose the access model
 
@@ -33,14 +93,15 @@ This capability is not an arbitrary-code sandbox.
 
 ## Runnable examples and package contents
 
-Both examples are independent Node.js 22+ projects with complete source,
+These examples are independent Node.js 22+ projects with complete source,
 credential-free configuration, a declaration, build script and package metadata:
 
 - [Background reader](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/background-reader)
 - [Catalog summary](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/catalog-summary)
+- [Configured background reader (protocol 2; Controller support pending)](https://github.com/uns-openhub/uns-kit/tree/master/examples/service-access/configured-reader)
 
 The npm core package also ships this guide at
-`@uns-kit/core/runtime/service-access-guide.md` and both projects under
+`@uns-kit/core/runtime/service-access-guide.md` and the projects under
 `node_modules/@uns-kit/core/dist/runtime/service-access-examples/`. Copy a project
 to your own directory before installing/building it; do not edit `node_modules`.
 Source code, not repeated prose fragments, is the complete runnable example.

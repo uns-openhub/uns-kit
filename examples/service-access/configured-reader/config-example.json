@@ -1,0 +1,25 @@
+{
+  "infra": {
+    "host": "localhost"
+  },
+  "uns": {
+    "processName": "example-configured-reader",
+    "instanceMode": "wait",
+    "handover": false
+  },
+  "mqtt": {
+    "username": {
+      "provider": "env",
+      "key": "MQTT_USERNAME",
+      "default": ""
+    },
+    "password": {
+      "provider": "env",
+      "key": "MQTT_PASSWORD",
+      "default": ""
+    }
+  },
+  "source": {
+    "topic": "example/configured/line-1/temperature"
+  }
+}

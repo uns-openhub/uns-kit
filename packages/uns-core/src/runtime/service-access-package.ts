@@ -3,7 +3,8 @@ import { lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { resolveServiceAccessDeclaration, type ServiceAccessDeclaration } from "./service-access.js";
+import { type ConfiguredServiceAccessDeclaration, resolveConfiguredServiceAccessDeclaration } from "./configured-service-access.js";
+import { type ServiceAccessDeclaration, resolveServiceAccessDeclaration } from "./service-access.js";
 
 const MAX_BYTES = 65536;
 
@@ -29,10 +30,13 @@ async function readJson(file: string): Promise<unknown> {
 /** Read the application's package data without importing application code.
  * Pass new URL('../package.json', import.meta.url) from a dist entry point.
  * Referenced declarations stay inside that package and cannot traverse symlinks. */
-export async function loadServiceAccessDeclaration(packageFile: string | URL): Promise<ServiceAccessDeclaration | null> {
+async function loadDeclaration<T>(
+  packageFile: string | URL,
+  resolve: (pkg: unknown, read: (relative: string) => Promise<unknown>) => Promise<T>,
+): Promise<T> {
   const file = path.resolve(packageFile instanceof URL ? fileURLToPath(packageFile) : packageFile);
   const root = await realpath(path.dirname(file));
-  return resolveServiceAccessDeclaration(await readJson(path.join(root, path.basename(file))), async (relative) => {
+  return resolve(await readJson(path.join(root, path.basename(file))), async (relative) => {
     let current = root;
     for (const segment of relative.split("/")) {
       current = path.join(current, segment);
@@ -41,3 +45,10 @@ export async function loadServiceAccessDeclaration(packageFile: string | URL): P
     return readJson(current);
   });
 }
+
+export const loadServiceAccessDeclaration = (packageFile: string | URL): Promise<ServiceAccessDeclaration | null> =>
+  loadDeclaration(packageFile, resolveServiceAccessDeclaration);
+
+/** Explicit protocol-2 opt-in; old protocol-1 callers continue to fail closed. */
+export const loadConfiguredServiceAccessDeclaration = (packageFile: string | URL): Promise<ConfiguredServiceAccessDeclaration | null> =>
+  loadDeclaration(packageFile, resolveConfiguredServiceAccessDeclaration);

@@ -33,7 +33,7 @@ fs.rmSync(serviceExamples, { recursive: true, force: true });
 fs.mkdirSync(serviceExamples, { recursive: true });
 fs.copyFileSync(path.resolve("../../examples/service-access/README.md"), path.join(serviceExamples, "README.md"));
 // Explicit assets only: never bundle a developer's ignored config, .env or node_modules.
-for (const [name, module] of [["background-reader", "reader.mjs"], ["catalog-summary", "offer.mjs"]]) {
+for (const [name, module] of [["background-reader", "reader.mjs"], ["configured-reader", "reader.mjs"], ["catalog-summary", "offer.mjs"]]) {
   for (const asset of ["package.json", "config-example.json", "README.md", "build.mjs", ".gitignore", "src/index.mjs", `src/${module}`]) {
     const target = path.join(serviceExamples, name, asset);
     fs.mkdirSync(path.dirname(target), { recursive: true });

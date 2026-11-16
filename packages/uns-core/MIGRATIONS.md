@@ -9,6 +9,19 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.50 - Configured UNS access proposal (protocol 2)
+
+This SDK adds an explicit, data-only protocol-2 declaration and helper for deriving
+UNS read requests from a JSON Pointer into the instance configuration. It grants
+nothing. Existing protocol-1 loaders and policies remain unchanged and reject
+protocol 2. Controller support, capability negotiation, administrative approval,
+loaded-configuration fencing and catalog source bindings are not included. Do not
+switch a deployed service until those host capabilities are implemented and
+verified. The migration of an existing catalog operation requires an explicit
+review of its changed declaration/configuration binding; retain rollback evidence.
+See `@uns-kit/core/runtime/service-access-guide.md` and the bundled
+`service-access-examples/configured-reader` example.
+
 ## 3.0.49 - Inline Service access package declarations
 
 Existing file declarations remain compatible; no permission is granted by this

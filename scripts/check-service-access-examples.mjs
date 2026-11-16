@@ -36,13 +36,14 @@ try {
   const bundled = path.join(consumer, "node_modules/@uns-kit/core/dist/runtime/service-access-examples");
   const examples = path.join(consumer, "examples/service-access");
   await cp(bundled, examples, { recursive: true });
-  const { loadServiceAccessDeclaration } = await import(path.join(consumer, "node_modules/@uns-kit/core/dist/runtime/service-access-package.js"));
+  const { loadServiceAccessDeclaration, loadConfiguredServiceAccessDeclaration } = await import(path.join(consumer, "node_modules/@uns-kit/core/dist/runtime/service-access-package.js"));
   for (const [name, module] of [
     ["background-reader", "reader.mjs"],
+    ["configured-reader", "reader.mjs"],
     ["catalog-summary", "offer.mjs"],
   ]) {
     const dir = path.join(examples, name);
-    const declaration = await loadServiceAccessDeclaration(path.join(dir, "package.json"));
+    const declaration = await (name === "configured-reader" ? loadConfiguredServiceAccessDeclaration : loadServiceAccessDeclaration)(path.join(dir, "package.json"));
     if (!declaration) throw new Error(`${name}: missing declaration`);
     for (const file of ["index.mjs", module]) run("node", ["--check", path.join(dir, "src", file)], consumer);
     run("node", ["build.mjs"], dir);

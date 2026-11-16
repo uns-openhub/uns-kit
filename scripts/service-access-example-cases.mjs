@@ -11,6 +11,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 import { readHistory, sourceTopic } from "./examples/service-access/background-reader/src/reader.mjs";
+import { readHistory as readConfiguredHistory, sourceTopic as configuredSourceTopic } from "./examples/service-access/configured-reader/src/reader.mjs";
 import { createSummaryOffer } from "./examples/service-access/catalog-summary/src/offer.mjs";
 
 async function token(t) {
@@ -39,6 +40,24 @@ async function body(req) {
 }
 const from = "2026-01-01T00:00:00Z",
   to = "2026-01-01T01:00:00Z";
+
+test("configured reader uses its configured path and rejects a path outside its declaration", async (t) => {
+  const { provider } = await token(t);
+  const seen = [];
+  const base = await listen(t, async (req, res) => {
+    seen.push(await body(req)); res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({results:[{data:[[1]]}]}));
+  });
+  const config = {source:{topic:"example/configured/line-1/temperature"}};
+  assert.equal(configuredSourceTopic(config), config.source.topic);
+  await readConfiguredHistory(base, from, to, {config,tokenProvider:provider});
+  assert.deepEqual(seen[0].topics, [config.source.topic]);
+  const other = {source:{topic:"example/configured/line-2/pressure"}};
+  await readConfiguredHistory(base, from, to, {config:other,tokenProvider:provider});
+  assert.deepEqual(seen[1].topics, [other.source.topic]);
+  await assert.rejects(readConfiguredHistory(base, from, to, {config:{source:{topic:"private/elsewhere"}},tokenProvider:provider}));
+  assert.equal(seen.length, 2);
+});
 
 test("background example uses the current file, bounded request and no caller credential", async (t) => {
   const { file, provider } = await token(t);

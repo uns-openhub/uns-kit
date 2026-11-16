@@ -15,7 +15,7 @@ export const SERVICE_RESOURCE_SCOPES = [
   "runtime:captures:write",
   "runtime:triggers:read",
 ] as const;
-const rule = z
+export const serviceAccessRuleSchema = z
   .string()
   .min(1)
   .max(512)
@@ -23,7 +23,9 @@ const rule = z
 const envelope = z
   .object({
     protocol: z.literal(1),
-    permissions: z.object({ scopes: z.array(z.enum(SERVICE_RESOURCE_SCOPES)).max(5), accessRules: z.array(rule).max(64) }).strict(),
+    permissions: z
+      .object({ scopes: z.array(z.enum(SERVICE_RESOURCE_SCOPES)).max(5), accessRules: z.array(serviceAccessRuleSchema).max(64) })
+      .strict(),
     publications: z.unknown().optional(),
   })
   .strict();
@@ -44,15 +46,19 @@ export function parseServiceAccessDeclaration(value: unknown): ServiceAccessDecl
 
 /** Package metadata accepts one inline declaration or one safe relative JSON
  * reference. Both normalize through the same parser; neither grants authority. */
-export const serviceAccessPackageReferenceSchema = z.union([
-  z.string().min(1).max(512).refine(
-    (value) => !value.includes("\\") && !value.startsWith("/") &&
+export const serviceAccessReferencePathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine(
+    (value) =>
+      !value.includes("\\") &&
+      !value.startsWith("/") &&
       !/^[A-Za-z]:/.test(value) &&
       value.split("/").every((part) => !!part && part !== "." && part !== ".."),
     "Expected a package-relative declaration path",
-  ),
-  envelope.transform(parseServiceAccessDeclaration),
-]);
+  );
+export const serviceAccessPackageReferenceSchema = z.union([serviceAccessReferencePathSchema, envelope.transform(parseServiceAccessDeclaration)]);
 
 export type ServiceAccessPackageReference = string | ServiceAccessDeclaration;
 
@@ -60,19 +66,23 @@ export async function resolveServiceAccessDeclaration(
   packageJson: unknown,
   readDeclaration: (relativePath: string) => Promise<unknown>,
 ): Promise<ServiceAccessDeclaration | null> {
-  const pkg = z.object({
-    unsDatahub: z.object({
-      serviceAccess: z.unknown().optional(),
-      catalogAccess: z.unknown().optional(),
-    }).passthrough().optional(),
-  }).passthrough().parse(packageJson);
+  const pkg = z
+    .object({
+      unsDatahub: z
+        .object({
+          serviceAccess: z.unknown().optional(),
+          catalogAccess: z.unknown().optional(),
+        })
+        .passthrough()
+        .optional(),
+    })
+    .passthrough()
+    .parse(packageJson);
   const metadata = pkg.unsDatahub;
   if (metadata?.serviceAccess === undefined) return null;
   if (metadata.catalogAccess !== undefined) throw Error("service_access_declaration_conflict");
   const reference = serviceAccessPackageReferenceSchema.parse(metadata.serviceAccess);
-  return parseServiceAccessDeclaration(
-    typeof reference === "string" ? await readDeclaration(reference) : reference,
-  );
+  return parseServiceAccessDeclaration(typeof reference === "string" ? await readDeclaration(reference) : reference);
 }
 export const serviceAccessDigest = operatorDigest;
 /** Publication source rules are deliberately not raw UNS permissions. A service
