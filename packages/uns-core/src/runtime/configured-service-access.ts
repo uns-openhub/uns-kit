@@ -40,6 +40,11 @@ export type ConfiguredUnsRequest = {
   policy: { scopes: "read:uns"[]; accessRules: string[] };
 };
 
+// A pointer is displayed during access review. Do not let a package turn a
+// known credential field into a topic, even if its plain value happens to pass
+// the topic grammar. This is a conservative guard, not secret detection.
+const sensitiveSegment =
+  /(?:password|passwd|passphrase|secretaccesskey|secretkey|secret|credentials?|token|apikey|privatekey|accesskey|encryptionkey|signingkey|authorization|connectionstring|bearer)(?:s|id|ref|reference|file|path|env|value|hash|store)?$/;
 function pointerSegments(pointer: string): string[] {
   if (!pointer.startsWith("/") || /~(?![01])/.test(pointer)) throw Error("configured_access_pointer_invalid");
   const segments = pointer
@@ -48,6 +53,8 @@ function pointerSegments(pointer: string): string[] {
     .map((segment) => segment.replace(/~1/g, "/").replace(/~0/g, "~"));
   if (segments.length > 8 || segments.some((segment) => !segment || ["__proto__", "prototype", "constructor"].includes(segment)))
     throw Error("configured_access_pointer_invalid");
+  if (segments.some((segment) => segment.split(/[\/~]/).some((part) => sensitiveSegment.test(part.toLowerCase().replace(/[-_.]/g, "")))))
+    throw Error("configured_access_pointer_sensitive");
   return segments;
 }
 

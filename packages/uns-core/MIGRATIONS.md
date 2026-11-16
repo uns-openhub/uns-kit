@@ -9,6 +9,13 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.52 - Reject credential-field pointers
+
+Configured direct UNS and catalog source pointers reject known credential-field
+names at any depth, including case and snake/kebab/dot variants. Use a distinct,
+non-secret source field. This conservative guard cannot detect secrets stored
+under unrelated names; never use credentials as topic configuration.
+
 ## 3.0.51 - Configured catalog source proposal (protocol 2)
 
 Configured Service access can declare catalog publications separately from direct

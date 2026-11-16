@@ -16,7 +16,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@uns-kit/core": "^3.0.50"
+    "@uns-kit/core": "^3.0.52"
   },
   "unsDatahub": {
     "schemaVersion": 1,
