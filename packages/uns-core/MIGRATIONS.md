@@ -9,6 +9,20 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.54 - Separate configured UNS and service API access
+
+When crossing `<3.0.54` to `>=3.0.54`, ordinary authenticated `UnsApiProxy`
+routes reject protocol-2 configured service bearers with HTTP 403
+`service_api_permission_required`, even when an UNS access rule matches the
+route. No service-to-service API permission is introduced. Audit any existing
+machine-to-machine use before updating the receiving application; do not widen
+UNS rules or replace the identity to bypass this boundary. User tokens,
+purpose-bound `UNS-Operator` calls and protocol-1 service bearers keep their
+existing authorization. Controller-mediated catalog calls and UNS history
+catch-all handlers use separate endpoints; custom handlers must enforce their own
+authorization. Older receiving SDKs are unchanged by installing this version
+elsewhere.
+
 ## 3.0.53 - Current authorization for service tokens
 
 Authenticated `@uns-kit/api` routes now check a managed service token with the

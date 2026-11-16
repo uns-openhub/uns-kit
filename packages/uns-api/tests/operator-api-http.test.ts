@@ -225,6 +225,14 @@ describe("actual SDK HTTP/JWKS operator endpoints", () => {
     expect((await post(f, body, native("user"), f.publicPath.replace(/control$/, "legacy"))).status).toBe(200);
     expect(f.effects()).toBe(2);
   });
+  it("does not turn a configured UNS bearer into a declared operator command", async () => {
+    const f=await fixture(), body={action:"pause",requestId:randomUUID()};
+    const bearer=jwt.sign({sub:principalId,role:"operator",serviceToken:true,machineIdentityId:principalId,
+      scopes:["read:uns"],accessRules:["#"],configuredService:{protocol:2,operationId:randomUUID()}},
+      keys.privateKey,{algorithm:"RS256",keyid:publicJwk.kid,expiresIn:60});
+    expect((await post(f,body,bearer)).status).toBe(403);
+    expect(f.effects()).toBe(0);
+  });
   it("accepts real scoped delegated calls for unrelated services through the same SDK", async () => {
     for (const [service, action] of [
       ["fixture-a", "pause"],

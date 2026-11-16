@@ -40,15 +40,21 @@ credential have separate roles; users can execute an approved operation without
 direct source access. A background reader uses only its reviewed service identity.
 OpenHub API scopes do not configure MQTT broker ACLs.
 
-Starting with 3.0.53, authenticated routes also check a managed service token's
-current authorization with the Controller on every request. This prevents a
-previously approved configuration from continuing to use an old token after its
-access changes. The Controller supplies the status URL to managed services. If
-the Controller is unreachable or does not support configured-access authority,
-these requests fail closed with HTTP 503. Ordinary user-token routes are unchanged.
-The application must still check any business-specific rules itself. Custom
-`registerCatchAll` handlers implement their own authentication and must perform
-the same current-authorization check when accepting service tokens.
+Starting with 3.0.54, a protocol-2 configured service token cannot access an
+ordinary authenticated SDK API route just because its UNS path rule matches the
+route. The route returns HTTP 403 `service_api_permission_required`; no separate
+service-to-service API permission is provided by this SDK. User tokens and
+purpose-bound `UNS-Operator` calls keep their existing authorization. Reviewed
+UNS history reads and Controller-mediated catalog publications use their own
+endpoints and are unaffected by this restriction.
+
+Since 3.0.53, authenticated routes also check eligible managed service tokens'
+current authorization with the Controller on every request. If the Controller
+is unreachable or lacks configured-access authority, those checks fail closed
+with HTTP 503. Protocol-1 service credentials retain this behavior. The application
+must still check its business-specific rules. Custom `registerCatchAll` handlers
+own their authentication and must check current authority and the requested UNS
+scope and paths themselves. Anonymous routes remain anonymous.
 
 The data offer example below uses in-memory rows to explain catalog registration.
 Use the mediated handler in the complete project when reading a protected source.

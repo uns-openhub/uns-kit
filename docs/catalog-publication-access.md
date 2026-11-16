@@ -17,11 +17,16 @@ its file path. The SDK reads the current credential when making a request. The U
 is not a place to copy a bearer token into application code.
 
 SDK 3.0.53 also checks managed service tokens presented to authenticated SDK
-routes against the Controller on every request. If the approved configuration
-changes, the old token is rejected. If the status check is unavailable or the
-Controller lacks configured-access authority, the request fails closed. Custom
-catch-all handlers own their authentication and must make this check themselves;
-the SDK cannot protect a handler that bypasses its authenticated routes.
+routes against the Controller on every request where they are eligible. If the
+approved configuration changes, the old token is rejected. If the status check
+is unavailable or the Controller lacks configured-access authority, the request
+fails closed. From SDK 3.0.54, a protocol-2 configured service bearer cannot call
+an ordinary authenticated SDK API route using an UNS path rule: it receives 403
+`service_api_permission_required`. A separate service-to-service API permission
+is not yet available. User tokens and purpose-bound `UNS-Operator` calls keep
+their existing authorization. Custom catch-all handlers own their authentication
+and must check authority, scope and paths themselves; the SDK cannot protect a
+handler that bypasses its authenticated routes.
 
 ## Configured paths: protocol 2 (SDK only)
 
