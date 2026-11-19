@@ -49,6 +49,7 @@ vi.mock("worker_threads", () => ({
 }));
 
 import UnsMqttProxy, { MessageMode } from "../packages/uns-core/src/uns-mqtt/uns-mqtt-proxy.js";
+import logger from "../packages/uns-core/src/logger.js";
 import type { IMqttAttributeMessage, IMqttPublishRequest, ITopicObject } from "../packages/uns-core/src/uns/uns-interfaces.js";
 
 const getLastWorker = (): InstanceType<typeof FakeWorker> => {
@@ -60,6 +61,55 @@ const getLastWorker = (): InstanceType<typeof FakeWorker> => {
 };
 
 describe("UnsMqttProxy publish drain contract", () => {
+  it.each(["configured-inspection", "external-temperature"])("preserves explicit empty identity without a false inference warning for %s", async name => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    const proxy = new UnsMqttProxy("localhost", name, "output");
+    const worker = getLastWorker();
+    let metadata: ITopicObject[] = [];
+    proxy.event.on("unsProxyProducedTopics", event => { metadata = event.producedTopics; });
+    const publication = proxy.publishMqttMessage({
+      topic: "example/site/inspection/point/", asset: "", objectType: "", objectId: "",
+      attributes: [{ attribute: "value", data: { time: "2026-11-19T12:00:00.000Z", value: 42 } }],
+    });
+    await vi.waitFor(() => expect(worker.postedMessages.filter(message => message.command === "enqueue")).toHaveLength(1));
+    const sent = worker.postedMessages.find(message => message.command === "enqueue");
+    expect(sent.topic).toBe("example/site/inspection/point/value");
+    worker.emit("message", { command: "enqueueAccepted", id: sent.id, status: "accepted" });
+    worker.emit("message", { command: "publishResult", id: sent.id, status: "success" });
+    await publication;
+    expect(metadata).toContainEqual(expect.objectContaining({
+      topic: "example/site/inspection/point/", asset: "", objectType: "", objectId: "", attribute: "value",
+    }));
+    expect(warn).not.toHaveBeenCalled();
+    await proxy.stop({ drain: false });
+  });
+
+  it.each([
+    { objectType: undefined, objectId: undefined },
+    { objectType: null, objectId: null },
+    { objectType: "explicit", objectId: undefined },
+    { objectType: "", objectId: undefined },
+  ])("keeps missing-identity inference and its warning for %j", async identity => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    const proxy = new UnsMqttProxy("localhost", "other-publisher", "output");
+    const message = { topic: "example/site/sensor/main/", asset: "", ...identity };
+    const resolved = (proxy as any).resolveObjectIdentity(message);
+    expect(resolved).toEqual({ asset: "", objectType: identity.objectType ?? "sensor", objectId: "main" });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("objectType/objectId missing"));
+    await proxy.stop({ drain: false });
+  });
+
+  it("keeps the short-topic main default visible when identity is absent", async () => {
+    const warn = vi.spyOn(logger, "warn").mockImplementation(() => logger);
+    const proxy = new UnsMqttProxy("localhost", "short-publisher", "output");
+    expect((proxy as any).resolveObjectIdentity({ topic: "example/", asset: "" })).toEqual({
+      asset: "", objectType: undefined, objectId: "main",
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("defaulting objectId to 'main'"));
+    await proxy.stop({ drain: false });
+  });
+
   it.each(["inspection-stream", "unrelated-sensor"])("roundtrips typed null state only after opt-in for %s", async name => {
     const options = { handoverStateContract: "explicit-clear-v1", allowNullData: true };
     const proxy = new UnsMqttProxy("localhost", name, "out", options);
@@ -181,6 +231,7 @@ describe("UnsMqttProxy publish drain contract", () => {
     await proxy.stop({ drain: false });
   });
   afterEach(async () => {
+    vi.restoreAllMocks();
     const workers = [...FakeWorker.instances];
     FakeWorker.instances.length = 0;
     for (const worker of workers) {

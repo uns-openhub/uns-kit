@@ -221,8 +221,9 @@ export default class UnsMqttProxy extends UnsProxy {
     const objectId = providedId ?? parsedId ?? "main";
     const asset = providedAsset ?? parsedAsset;
 
-    // If values are provided, trust them; otherwise derive from topic.
-    if (!providedType || !providedId) {
+    // Empty segments explicitly select the supported base+attribute path.
+    // Match the nullish fallback above: only absent values require inference.
+    if (providedType == null || providedId == null) {
       if (parsedType && parsedId) {
         logger.warn(`${this.instanceNameWithSuffix} - objectType/objectId missing; derived from topic tail ${parsedType}/${parsedId}`);
       } else {
