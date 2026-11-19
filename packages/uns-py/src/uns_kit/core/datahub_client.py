@@ -6,7 +6,8 @@ import urllib.parse
 import urllib.request
 import threading
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping, Optional, Sequence, TYPE_CHECKING, TypedDict, Unpack
+from typing import Any, Literal, Mapping, Optional, Sequence, TYPE_CHECKING, TypedDict
+from typing_extensions import Unpack
 
 from .auth_client import AuthClient
 from .service_token_provider import AccessTokenProvider
@@ -223,6 +224,7 @@ class UnsClient:
             if service_token:
                 self.access_token = service_token
                 return service_token
+            raise RuntimeError("Service credential unavailable; review Service access")
         try:
             if self.auth_client is None:
                 self.auth_client = AuthClient.create()
@@ -370,6 +372,11 @@ class UnsClient:
         body: Optional[dict[str, Any]] = None,
         token: Optional[str] = None,
     ) -> RawResponse:
+        if self.token_provider is not None and token is not None:
+            from .http_transport import bounded_http_request, http_origin
+            if http_origin(url) != http_origin(self.api_url):
+                raise ClientError("Service requests must stay on the configured origin")
+            return bounded_http_request(method, url, body=body, token=token, timeout=self.timeout, max_bytes=16 * 1024 * 1024)
         data = None if body is None else json.dumps(body).encode("utf-8")
         request = urllib.request.Request(
             url,

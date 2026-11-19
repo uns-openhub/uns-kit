@@ -6,6 +6,118 @@ Python UNS SDK for runtime services, API/service exposure, and Datahub access. P
 - Process + instance status topics (active/heap/uptime/alive + stats).
 - Minimal UNS packet builder/parser (data/table) aligned with TS core.
 
+## Durable input and same-host hot handover (0.2.10)
+
+Opt-in `DurableInputJournal`, independent `DurableMqttReceiver` and `JournalInput`
+commit QoS 1 input before ACK and checkpoint only after handlers and output flush.
+Capacity pauses admission without pruning pending input. Unknown effects survive
+restart for explicit reconciliation instead of automatic business replay.
+
+`JournalHandover` switches one shared local journal between exact Python owners,
+drains HTTP/application work, validates/restores application and output state once,
+and persists operation phases. It requires private local POSIX storage and strict
+QoS 1 output. Existing RAM-only inputs and legacy handover arguments are unchanged.
+
+Read [the guide](https://github.com/uns-openhub/uns-kit/blob/master/docs/python-durable-input-handover.md) and bundled 0.2.10
+migration entry. This is Python journal protocol 1; TS correlated-v2, Controller
+process-group authorization, cross-host transfer and online backups remain separate.
+
+## Managed MQTT input and HTTP drain (0.2.9)
+
+Managed MQTT input has one explicit async handler, bounded count/bytes, subscription
+readiness and unsubscribe-before-drain. Enable it with `managedInput: true` in
+`UnsParameters`, register `set_input_handler()` and await `start_input()`.
+Failed input remains available for review and is never replayed automatically.
+
+HTTP requests now remain owned through application completion, including after
+disconnect. Ownership gates return retryable 503 responses on passive owners.
+`drain_requests()`/Stop waits for accepted work; unknown effects block clean Stop.
+Use `run_read_only_request(event, factory)` only for explicitly effect-free work.
+
+Process Stop drains managed input and HTTP before application cleanup/output
+close. Owned outputs have bounded capacity waiting and strict publish drain.
+Read the bundled 0.2.9 migration entry before upgrading existing cleanup flows.
+The [guide and tested examples](https://github.com/uns-openhub/uns-kit/blob/master/docs/python-managed-input-http.md)
+describe local ownership, real broker/HTTP acceptance and remaining limits.
+
+## Service authority and async clients (0.2.8)
+
+`AsyncUnsClient` and `create_async_database_client()` reuse the existing API/SQL
+contracts through bounded worker threads, so blocking IO stays off asyncio.
+The service token is reread for every authorized request. Each client serializes
+operations and supports `async with` or explicit awaited `close()`.
+
+```python
+from uns_kit import AsyncUnsClient, create_async_database_client
+
+async with AsyncUnsClient(controller_base) as client:
+    history = await client.history("example/site/line/equipment/main/temperature", limit=100)
+
+async with create_async_database_client(resolved_database_config) as database:
+    rows = await database.query_file("queries/read-window.sql", {"fromTs": from_time})
+```
+
+The default async credential source is `ServiceTokenProvider`; missing service
+credentials never cause implicit human login. Cancellation stops waiting while
+accepted IO remains owned; close waits for it. Do not retry a possibly committed
+POST/SQL operation merely because its caller timed out.
+
+Authenticated Python API receivers now require a fresh Controller token-status
+check for verified service/machine claims. Configure the trusted
+`service_authorization_status_url` option or `UNS_CONTROLLER_PUBLIC_BASE`, and
+require `configuredAccessAuthority: 2`. Older/unavailable status endpoints fail
+closed. Configured UNS grants and unsupported Operator delegations cannot call
+ordinary service APIs. Existing ordinary user JWT semantics are preserved.
+
+Read the bundled `uns_kit/MIGRATIONS.md` before updating receivers or relying on
+automatic SQL recovery: PostgreSQL/Oracle no longer replay failed operations.
+See the [full guide and limits](https://github.com/uns-openhub/uns-kit/blob/master/docs/python-service-access-async.md)
+and [two reference readers](https://github.com/uns-openhub/uns-kit/tree/master/examples/python-service-access).
+
+## Runtime and discovery parity (0.2.7)
+
+Python now provides `ProcessWork`, opt-in `ProcessLifecycleHooks` and the same
+retained service-metadata wire contract as TS. Read the bundled
+`uns_kit/MIGRATIONS.md` when crossing 0.2.7, especially if you reuse process
+owners after stopping or catch specific cleanup exceptions. The
+[parity matrix and supported limits](https://github.com/uns-openhub/uns-kit/blob/master/docs/python-typescript-parity.md)
+distinguish implemented mechanisms from planned TS capabilities.
+
+```python
+from uns_kit import ProcessWork, ProcessLifecycleHooks
+
+# After constructing your UnsProxyProcess, before starting application inputs:
+accepted = ProcessWork(process.is_active)
+
+def release_inputs():
+    # Also close your application's MQTT/HTTP input admission here.
+    accepted.pause()
+
+process.register_lifecycle_participant(ProcessLifecycleHooks(
+    on_release=release_inputs,
+    drain=accepted.drain,
+))
+
+# Background polling: await accepted.run(poll_and_publish)
+# Already accepted transport input: await accepted.track(handle_message(message))
+# These helpers do not limit concurrency; keep admission bounded separately.
+
+await process.publish_service_metadata({
+    "serviceId": "example-processor",
+    "kind": "service",
+    "capabilities": ["telemetry-processing"],
+})
+
+# From the application's existing signal/finally cleanup path:
+await process.stop()  # also available as await process.shutdown()
+```
+
+Stop first runs release hooks, then awaits accepted application work before
+closing transports. Timeout does not cancel that work: another Stop awaits the
+same drain. Drain failures block a clean stop. The application continues to own
+signals, MQTT/HTTP admission and business resource cleanup. This does not add a
+durable job queue, HTTP ownership transfer or hot handover.
+
 ## 0.2.0 table migration
 
 `UnsPacket.table()` now emits MQTT packet version `2.0.0` and named object
@@ -496,8 +608,14 @@ When created inside this monorepo, `pyproject.toml` is automatically set to use 
 - Packet shape mirrors the TypeScript core: `{"version":"1.3.0","message":{"data":{...}},"sequenceId":0}`.
 - Windows: the library sets `WindowsSelectorEventLoopPolicy()` to avoid `add_reader/add_writer` `NotImplementedError`.
 
-## TODO (parity with TS core)
-- Handover manager parity: subscribe to wildcard `active` and `handover` topics, keep new instances passive until timeout or handover completion, and support `handover_intent`, `handover_request`, `handover_subscriber`, `handover_fin`, and `handover_ack`.
-- Publish throttling / queue parity: add buffered ordered publishing instead of direct proxy-path publish, plus publisher/subscriber active-passive controls and passive-drain behavior.
-- Status parity: add process-level `alive` and `uptime`, publisher/subscriber active flags everywhere, published/subscribed message count and byte metrics, and process identity on active status packets.
-- Optional: dictionary/measurement helpers + CLI wrapper.
+## Remaining parity work
+
+See the [current comparison and sequence](https://github.com/uns-openhub/uns-kit/blob/master/docs/python-typescript-parity.md).
+The 0.2.8 slice adds ordinary service-authority checking and asynchronous client
+and database facades. The 0.2.9 slice adds managed MQTT input and HTTP ownership/
+drain. Operator API and host-backed stateful transitions remain future work.
+The 0.2.10 slice adds same-host Python journal handover and durable input.
+TS handover transport, persistent Runtime output, retained stores and process groups
+need separate versioned implementations and host acceptance. The existing
+`handover` argument is currently a compatibility parameter, not an implemented
+handover manager. Bounded RAM publishing and flush/drain already exist.

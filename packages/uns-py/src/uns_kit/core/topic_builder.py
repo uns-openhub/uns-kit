@@ -54,6 +54,9 @@ class TopicBuilder:
     def handover_topic(self) -> str:
         return f"{self._base}handover"
 
+    def service_metadata_topic(self) -> str:
+        return f"{self._base}service-metadata"
+
     def wildcard_active_topic(self) -> str:
         parts = self._base.strip("/").split("/")
         if len(parts) < 2:

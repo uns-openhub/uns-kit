@@ -1,0 +1,16 @@
+[
+  {"name":"current machine", "claims":{"serviceToken":true}, "body":{"active":true,"protocolVersion":1,"principalType":"machine","configuredAccessAuthority":2}, "expectedStatus":200},
+  {"name":"revoked machine", "claims":{"identityType":"machine"}, "body":{"active":false,"protocolVersion":1,"principalType":"machine","configuredAccessAuthority":2}, "expectedStatus":403},
+  {"name":"old controller", "claims":{"machineIdentityId":"fixture"}, "body":{"active":true,"protocolVersion":1,"principalType":"machine"}, "expectedStatus":503},
+  {"name":"human status cannot authorize machine", "claims":{"serviceToken":true}, "body":{"active":true,"protocolVersion":1,"principalType":"user","configuredAccessAuthority":2}, "expectedStatus":503},
+  {"name":"UNS grant is not service API permission", "claims":{"serviceToken":true,"configuredService":{"protocol":2}}, "body":{"active":true,"protocolVersion":1,"principalType":"machine","configuredAccessAuthority":2}, "expectedStatus":403,"expectedProbes":0},
+  {"name":"missing status endpoint", "claims":{"serviceToken":true}, "noStatusUrl":true, "body":{}, "expectedStatus":503,"expectedProbes":0},
+  {"name":"false service hint still needs authority", "claims":{"serviceToken":false}, "noStatusUrl":true,"body":{}, "expectedStatus":503,"expectedProbes":0},
+  {"name":"boolean protocol is invalid", "claims":{"serviceToken":true},"body":{"active":true,"protocolVersion":true,"principalType":"machine","configuredAccessAuthority":2},"expectedStatus":403},
+  {"name":"numeric active is invalid", "claims":{"serviceToken":true},"body":{"active":1,"protocolVersion":1,"principalType":"machine","configuredAccessAuthority":2},"expectedStatus":403},
+  {"name":"authority version differs", "claims":{"serviceToken":true},"body":{"active":true,"protocolVersion":1,"principalType":"machine","configuredAccessAuthority":3},"expectedStatus":503},
+  {"name":"authority denied", "claims":{"serviceToken":true}, "httpStatus":403,"body":{},"expectedStatus":403},
+  {"name":"authority unavailable", "claims":{"serviceToken":true}, "httpStatus":503,"body":{},"expectedStatus":503},
+  {"name":"redirect is not authority", "claims":{"serviceToken":true}, "httpStatus":302,"body":{},"expectedStatus":503},
+  {"name":"ordinary user compatibility", "claims":{"sub":"fixture-user"},"body":{},"expectedStatus":200,"expectedProbes":0}
+]

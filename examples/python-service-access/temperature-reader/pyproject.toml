@@ -1,0 +1,9 @@
+[tool.poetry]
+name = "example-python-temperature-reader"
+version = "1.0.0"
+description = "Bounded background UNS history reader"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+uns-kit = ">=0.2.8,<0.3"

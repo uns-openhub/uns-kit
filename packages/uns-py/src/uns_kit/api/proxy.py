@@ -3,19 +3,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import socket
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
+from urllib.parse import urljoin
 
 from ..core.client import UnsMqttClient
+from ..core.async_worker import AsyncCapacityError, AsyncClientClosedError, BoundedAsyncWorker
 from ..core.packet import UnsPacket, isoformat
 from ..core.proxy import UnsProxy
 from ..core.topic_builder import TopicBuilder
 from ..core.topic_matcher import matches_topic_filter
 from ..core.uns_path import build_uns_route_path
 from ..version import __package_name__, __version__
+from .service_authority import ServiceApiAuthority, ServiceAuthorizationError, has_service_authorization_hint
+from .request_lifecycle import RequestLifecycle, RequestOwnershipMiddleware
 
 
 logger = logging.getLogger(__name__)
@@ -140,6 +145,8 @@ class ApiProxyOptions:
     api_base_path: Optional[str] = None
     swagger_base_path: Optional[str] = None
     disable_default_api_mount: bool = False
+    service_authorization_status_url: Optional[str] = None
+    max_pending_requests: int = 256
 
     @staticmethod
     def from_value(value: Optional["ApiProxyOptions | Mapping[str, Any]"]) -> "ApiProxyOptions":
@@ -153,6 +160,8 @@ class ApiProxyOptions:
             api_base_path=value.get("apiBasePath") or value.get("api_base_path"),
             swagger_base_path=value.get("swaggerBasePath") or value.get("swagger_base_path"),
             disable_default_api_mount=bool(value.get("disableDefaultApiMount") or value.get("disable_default_api_mount", False)),
+            service_authorization_status_url=value.get("serviceAuthorizationStatusUrl") or value.get("service_authorization_status_url") or value.get("operatorAuthorizationStatusUrl"),
+            max_pending_requests=value.get("maxPendingRequests", value.get("max_pending_requests", 256)),
         )
 
 
@@ -204,6 +213,14 @@ class UnsApiProxy(UnsProxy):
         options: Optional[ApiProxyOptions | Mapping[str, Any]] = None,
     ) -> None:
         self.options = ApiProxyOptions.from_value(options)
+        self._requests = RequestLifecycle(max_pending=self.options.max_pending_requests)
+        self._stop_task: asyncio.Task | None = None
+        controller_base = os.environ.get("UNS_CONTROLLER_PUBLIC_BASE")
+        status_url = self.options.service_authorization_status_url
+        if status_url is None and controller_base:
+            status_url = urljoin(controller_base, "/api/auth/token-status")
+        self._service_authority = ServiceApiAuthority(status_url)
+        self._jwt_worker = BoundedAsyncWorker(max_pending=16)
         self.process_name = process_name
         self.instance_name = instance_name
         self.topic_builder = topic_builder
@@ -245,7 +262,36 @@ class UnsApiProxy(UnsProxy):
     def get_process_name(self) -> str:
         return self.process_name
 
-    async def stop(self) -> None:
+    def set_ownership_gate(self, gate: Callable[[], bool]) -> None:
+        self._requests.set_gate(gate)
+
+    def setOwnershipGate(self, gate: Callable[[], bool]) -> None:
+        self.set_ownership_gate(gate)
+
+    def begin_release(self) -> None:
+        self._requests.begin_release()
+
+    async def drain_requests(self, timeout: float | None = 30.0) -> None:
+        await self._requests.drain(timeout)
+
+    async def run_read_only_request(self, context: Any, operation: Callable[[], Any]) -> Any:
+        return await self._requests.run_read_only(context, operation)
+
+    async def stop(self, *, timeout: float | None = 30.0) -> None:
+        self.begin_release()
+        if self._stop_task is None:
+            self._stop_task = asyncio.create_task(self._perform_stop(timeout))
+            self._stop_task.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+        task = self._stop_task
+        try:
+            await asyncio.shield(task)
+        except Exception:
+            if self._stop_task is task:
+                self._stop_task = None
+            raise
+
+    async def _perform_stop(self, timeout: float | None) -> None:
+        await self.drain_requests(timeout)
         if self._status_task and not self._status_task.done():
             self._status_task.cancel()
             try:
@@ -255,7 +301,11 @@ class UnsApiProxy(UnsProxy):
         if self._server is not None:
             self._server.should_exit = True
         if self._server_thread is not None:
-            self._server_thread.join(timeout=5)
+            await asyncio.to_thread(self._server_thread.join, timeout)
+            if self._server_thread.is_alive():
+                raise TimeoutError("HTTP server exit remains unconfirmed")
+        await self._service_authority.close()
+        await self._jwt_worker.close()
         await super().stop()
 
     async def get(self, topic: str, asset: str, object_type: str, object_id: str, attribute: str, options: Optional[GetEndpointOptions | Mapping[str, Any]] = None) -> None:
@@ -537,7 +587,9 @@ class UnsApiProxy(UnsProxy):
                 'API support requires the "api" extra. Install with `pip install "uns-kit[api]"`.'
             ) from exc
 
-        return FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+        app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+        app.add_middleware(RequestOwnershipMiddleware, lifecycle=self._requests)
+        return app
 
     def _start_server(self) -> None:
         if self._server_thread is not None:
@@ -674,6 +726,8 @@ class UnsApiProxy(UnsProxy):
         logger.debug("Bearer token extracted successfully.")
         try:
             payload = await self._decode_token(token)
+        except (AsyncCapacityError, AsyncClientClosedError, TimeoutError):
+            return JSONResponse({"error": "token_verification_unavailable"}, status_code=503)
         except Exception as exc:
             logger.error(
                 {
@@ -686,31 +740,38 @@ class UnsApiProxy(UnsProxy):
             )
             return JSONResponse({"error": "Invalid token"}, status_code=401)
 
-        user_email = str(payload.get("email") or "Unknown")
-        logger.info(
-            {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "user": user_email,
-                "endpoint": endpoint,
-                "message": "Access granted",
-            }
-        )
-
         access_rules = payload.get("accessRules")
         if not isinstance(access_rules, list):
             path_filter = payload.get("pathFilter")
             access_rules = [path_filter] if isinstance(path_filter, str) and path_filter else []
 
+        service = has_service_authorization_hint(payload)
+        # An empty/non-string machine rule set must never become unrestricted.
+        def valid_rule(rule: Any) -> bool:
+            if not isinstance(rule, str) or not rule:
+                return False
+            parts = rule.split("/")
+            return all(part and (part == "+" or part == "#" and index == len(parts) - 1 or "+" not in part and "#" not in part) for index, part in enumerate(parts))
+
+        if service and (not access_rules or any(not valid_rule(rule) for rule in access_rules)):
+            return JSONResponse({"error": "Path not allowed by token access rules"}, status_code=403)
         if access_rules and not any(matches_topic_filter(str(rule), full_path) for rule in access_rules):
             return JSONResponse({"error": "Path not allowed by token access rules"}, status_code=403)
-
+        try:
+            await self._service_authority.authorize(payload, auth_header)
+        except ServiceAuthorizationError as error:
+            return JSONResponse({"error": error.code}, status_code=error.status)
+        logger.info("Authenticated API request authorized")
         return None
 
     async def _decode_token(self, token: str) -> dict[str, Any]:
+        return await asyncio.wait_for(self._jwt_worker.run(lambda: self._decode_token_sync(token)), timeout=5.0)
+
+    def _decode_token_sync(self, token: str) -> dict[str, Any]:
         import jwt
 
         if self.options.jwks:
-            jwks_client = jwt.PyJWKClient(self.options.jwks["wellKnownJwksUrl"])
+            jwks_client = jwt.PyJWKClient(self.options.jwks["wellKnownJwksUrl"], timeout=5.0)
             signing_key = jwks_client.get_signing_key_from_jwt(token)
             algorithms = self.options.jwks.get("algorithms") or ["RS256"]
             return dict(

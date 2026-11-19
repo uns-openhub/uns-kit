@@ -1,0 +1,9 @@
+[tool.poetry]
+name = "example-python-warehouse-reader"
+version = "1.0.0"
+description = "Independent bounded background UNS history reader"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = "^3.10"
+uns-kit = ">=0.2.8,<0.3"

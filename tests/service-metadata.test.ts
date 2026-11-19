@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { MqttTopicBuilder } from "../packages/uns-core/src/uns-mqtt/mqtt-topic-builder.ts";
 import { buildUnsServiceMetadata } from "../packages/uns-core/src/uns/service-metadata.ts";
 
 describe("service metadata", () => {
+  const fixtures = JSON.parse(readFileSync(new URL("./fixtures/service-metadata-v1.json", import.meta.url), "utf8"));
+  for (const fixture of fixtures) {
+    it(`matches the shared Python/TypeScript wire fixture for ${fixture.processName}`, () => {
+      const value = buildUnsServiceMetadata({
+        ...fixture,
+        now: new Date(fixture.now),
+      });
+      expect(JSON.parse(JSON.stringify(value))).toEqual(fixture.expected);
+    });
+  }
   it("builds a normalized retained service metadata payload", () => {
     const metadata = buildUnsServiceMetadata({
       processName: "uns-bridge-mqtt",

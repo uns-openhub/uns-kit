@@ -1710,7 +1710,6 @@ files = [
     {file = "typing_extensions-4.15.0-py3-none-any.whl", hash = "sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548"},
     {file = "typing_extensions-4.15.0.tar.gz", hash = "sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466"},
 ]
-markers = {main = "python_version <= \"3.12\" and (extra == \"database\" or extra == \"api\") or extra == \"api\" and python_version >= \"3.12\" or python_version == \"3.10\""}
 
 [[package]]
 name = "typing-inspection"
@@ -1809,4 +1808,4 @@ infisical = ["infisicalsdk"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "761f8412c6e4f1aea7ffeba6f920c634b9506502c424cf704cedd9caec67e2c1"
+content-hash = "9436bd10704301103f918df304bb785cbffb54bb11f7b3640dd7010be063b565"

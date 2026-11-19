@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+from .durable_journal import DurableInputJournal, JournalRecord, JournalError, JournalCapacityError, JournalOwnershipError
+from .durable_input import DurableMqttReceiver, JournalInput
+from .journal_handover import ApplicationHandoverState, JournalHandover, create_application_handover_contract
+
 from importlib import import_module
 
 __all__ = [
+    "DurableInputJournal", "JournalRecord", "JournalError", "JournalCapacityError", "JournalOwnershipError",
+    "DurableMqttReceiver", "JournalInput", "ApplicationHandoverState", "JournalHandover", "create_application_handover_contract",
     "ConfigFile",
     "base_config_schema",
     "compose_config_schema",
@@ -26,6 +32,7 @@ __all__ = [
     "UnsMqttClient",
     "StatusMonitor",
     "UnsMqttProxy",
+    "ManagedInputError",
     "MessageMode",
     "UnsProxyProcess",
     "UnsProxyProcessSync",
@@ -33,6 +40,12 @@ __all__ = [
     "UnsParameters",
     "UnsMqttProxySync",
     "UnsClient",
+    "AsyncUnsClient",
+    "AsyncCapacityError",
+    "AsyncClientClosedError",
+    "BackgroundServiceAccessDeclaration",
+    "parse_background_service_access_declaration",
+    "load_background_service_access_declaration",
     "UnsClientManager",
     "AccessTokenProvider",
     "ServiceTokenProvider",
@@ -63,9 +76,26 @@ __all__ = [
     "configure_logger",
     "get_logger",
     "State",
+    "ProcessWork",
+    "ProcessLifecycleHooks",
+    "ProcessShutdownError",
+    "UnsServiceMetadataInput",
+    "build_uns_service_metadata",
 ]
 
 _LAZY_EXPORTS: dict[str, tuple[str, str]] = {
+    "ManagedInputError": ("uns_kit.core.managed_input", "ManagedInputError"),
+    "BackgroundServiceAccessDeclaration": ("uns_kit.core.service_access", "BackgroundServiceAccessDeclaration"),
+    "parse_background_service_access_declaration": ("uns_kit.core.service_access", "parse_background_service_access_declaration"),
+    "load_background_service_access_declaration": ("uns_kit.core.service_access", "load_background_service_access_declaration"),
+    "AsyncUnsClient": ("uns_kit.core.async_datahub_client", "AsyncUnsClient"),
+    "AsyncCapacityError": ("uns_kit.core.async_worker", "AsyncCapacityError"),
+    "AsyncClientClosedError": ("uns_kit.core.async_worker", "AsyncClientClosedError"),
+    "ProcessWork": ("uns_kit.core.process_work", "ProcessWork"),
+    "ProcessLifecycleHooks": ("uns_kit.core.lifecycle", "ProcessLifecycleHooks"),
+    "ProcessShutdownError": ("uns_kit.core.lifecycle", "ProcessShutdownError"),
+    "UnsServiceMetadataInput": ("uns_kit.core.service_metadata", "UnsServiceMetadataInput"),
+    "build_uns_service_metadata": ("uns_kit.core.service_metadata", "build_uns_service_metadata"),
     "ConfigFile": ("uns_kit.core.config_file", "ConfigFile"),
     "base_config_schema": ("uns_kit.core.config_schema", "base_config_schema"),
     "compose_config_schema": ("uns_kit.core.config_schema", "compose_config_schema"),

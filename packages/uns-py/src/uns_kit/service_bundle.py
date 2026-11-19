@@ -218,6 +218,13 @@ def generate_agents_markdown(bundle: ServiceBundle) -> str:
         "## Verification",
         *_render_string_list(bundle.docs.agents.verification),
         "",
+        "## Python SDK upgrades",
+        "- Before updating uns-kit, record the installed and target versions and read the bundled uns_kit/MIGRATIONS.md.",
+        "- Crossing <0.2.10 to >=0.2.10 adds opt-in durable QoS 1 input and same-host Python journal handover protocol 1. Keep the receiver independent, bind semantic resources/launch IDs and reconcile unknown effects; never declare TS correlated-v2 or Controller process-group support from these helpers. Read docs/python-durable-input-handover.md.",
+        "- Crossing <0.2.9 to >=0.2.9 adds managed MQTT input/HTTP drain and strict bounded process-owned output. Register one input handler and await start_input; await accepted effects and reconcile unknown HTTP/input/publish outcomes. Local managed_ownership is not a host lease or hot handover capability.",
+        "- Crossing <0.2.8 to >=0.2.8 requires current Controller authority for service API JWTs. Configured UNS grants are not service API permissions. PostgreSQL/Oracle no longer replay failed SQL; async cancellation does not roll back an accepted effect. Await client cleanup and reconcile uncertain operations.",
+        "- Crossing <0.2.7 to >=0.2.7 changes async process stop error aggregation and forbids restarting a stopped owner. Opt-in lifecycle hooks must stop new input admission before draining accepted work; timeout does not cancel effects. Keep one application signal owner and never infer hot handover support from the SDK version.",
+        "",
     ]
     return "\n".join(lines)
 

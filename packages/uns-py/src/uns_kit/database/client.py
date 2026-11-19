@@ -13,27 +13,6 @@ from .types import DatabaseAdapter, DatabaseClient, DatabaseDialect, DatabaseExe
 logger = get_logger(__name__)
 
 
-def _looks_like_broken_connection_error(error: Exception) -> bool:
-    message = str(error).lower()
-    return any(
-        needle in message
-        for needle in (
-            "connection closed",
-            "connection is closed",
-            "connection not open",
-            "connection has been closed",
-            "not connected",
-            "server closed the connection unexpectedly",
-            "terminating connection",
-            "closed the connection",
-            "dpi-1080",
-            "dpi-1010",
-            "dpy-1001",
-            "dpY-4011".lower(),
-        )
-    )
-
-
 class _DatabaseClientImpl:
     def __init__(
         self,
@@ -149,11 +128,11 @@ class _PgAdapter:
         connection = self._get_connection()
         try:
             return operation(connection)
-        except Exception as error:
-            if not _looks_like_broken_connection_error(error):
-                raise
+        except Exception:
+            # The server may have committed before disconnecting. Never replay
+            # this SQL; only a separately requested operation may reconnect.
             self._drop_connection()
-            return operation(self._get_connection())
+            raise
 
     def query(self, statement) -> DatabaseQueryResult:
         def operation(connection) -> DatabaseQueryResult:
@@ -220,11 +199,9 @@ class _OracleAdapter:
         connection = self._get_connection()
         try:
             return operation(connection)
-        except Exception as error:
-            if not _looks_like_broken_connection_error(error):
-                raise
+        except Exception:
             self._drop_connection()
-            return operation(self._get_connection())
+            raise
 
     def query(self, statement) -> DatabaseQueryResult:
         def operation(connection) -> DatabaseQueryResult:

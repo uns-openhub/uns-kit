@@ -67,6 +67,8 @@ class UnsMqttClient:
         self._stats_task: Optional[asyncio.Task] = None
         self._connected = asyncio.Event()
         self._closing = False
+        self._managed_input_owner = None
+        self._managed_queue_type = None
         self._connect_lock = asyncio.Lock()
         self._published_message_count = 0
         self._published_message_bytes = 0
@@ -135,6 +137,8 @@ class UnsMqttClient:
             kwargs["tls_context"] = tls_context
         # aiomqtt v2.x supports clean_session; keep a fallback for API changes.
         kwargs["clean_session"] = self.clean_session
+        if self._managed_queue_type is not None:
+            kwargs["queue_type"] = self._managed_queue_type
         try:
             client = aiomqtt.Client(**kwargs)
         except TypeError:
@@ -150,10 +154,10 @@ class UnsMqttClient:
     async def _probe_socket(self) -> None:
         try:
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: socket.create_connection((self.host, self.port or 1883), timeout=2),
-            )
+            def probe() -> None:
+                with socket.create_connection((self.host, self.port or 1883), timeout=2):
+                    pass
+            await loop.run_in_executor(None, probe)
         except Exception as exc:
             raise aiomqtt.MqttError(f"Cannot reach MQTT broker at {self.host}:{self.port or 1883}") from exc
 
@@ -223,12 +227,27 @@ class UnsMqttClient:
                 else:
                     raise
 
+    async def publish_once_raw(self, topic: str, payload: str | bytes, *, qos: int = 1, retain: bool = False) -> None:
+        """One broker attempt; a missing ACK is unknown, never an automatic replay."""
+        await self._ensure_connected()
+        assert self._client is not None
+        data = payload.encode() if isinstance(payload, str) else payload
+        self._published_message_count += 1
+        self._published_message_bytes += len(data)
+        try:
+            await self._client.publish(topic, data, qos=qos, retain=retain)
+        except aiomqtt.MqttError:
+            self._connected.clear()
+            raise
+
     async def publish_packet(self, topic: str, packet: dict, *, qos: int = 0, retain: bool = False) -> None:
         payload = UnsPacket.to_json(packet)
         await self.publish_raw(topic, payload, qos=qos, retain=retain)
 
     @asynccontextmanager
     async def messages(self, topics: str | List[str]) -> AsyncIterator[AsyncIterator[aiomqtt.Message]]:
+        if self._managed_input_owner is not None:
+            raise RuntimeError("Managed MQTT input owns this client's subscription and reader")
         await self._ensure_connected()
         assert self._client
         # aiomqtt exposes a single async iterator at `client.messages` (not a context manager).
@@ -267,6 +286,8 @@ class UnsMqttClient:
         """
         Async generator that keeps the subscription alive across disconnects.
         """
+        if self._managed_input_owner is not None:
+            raise RuntimeError("Managed MQTT input owns this client's subscription and reader")
         while not self._closing:
             await self._ensure_connected()
             try:

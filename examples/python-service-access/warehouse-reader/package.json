@@ -1,0 +1,17 @@
+{
+  "name": "example-python-warehouse-reader",
+  "version": "1.0.0",
+  "private": true,
+  "unsDatahub": {
+    "schemaVersion": 1,
+    "kind": "addon",
+    "controllerCompatibility": ">=2 <3",
+    "serviceAccess": {
+      "protocol": 1,
+      "permissions": {
+        "scopes": ["read:uns"],
+        "accessRules": ["warehouse/cold-store/pump-7/equipment/main/pressure"]
+      }
+    }
+  }
+}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from ..core.events import EventEmitter
 
@@ -27,7 +27,7 @@ class CronProxyOptions:
 
 
 class UnsCronProxy:
-    def __init__(self, cron_input: CronScheduleInput, options: Optional[CronProxyOptions | dict[str, Any]] = None) -> None:
+    def __init__(self, cron_input: CronScheduleInput, options: Optional[CronProxyOptions | dict[str, Any]] = None, *, active: Callable[[], bool] = lambda: True) -> None:
         try:
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
             from apscheduler.triggers.cron import CronTrigger
@@ -40,6 +40,7 @@ class UnsCronProxy:
         self._scheduler = AsyncIOScheduler()
         self._CronTrigger = CronTrigger
         self._started = False
+        self._active = active
         normalized_options = self._normalize_options(options)
         for schedule in self._normalize_schedules(cron_input, normalized_options):
             trigger = self._build_trigger(schedule.cron_expression, schedule.options)
@@ -70,6 +71,8 @@ class UnsCronProxy:
         self._started = False
 
     async def _emit_event(self, *, event_name: Optional[str], cron_expression: str) -> None:
+        if not self._active():
+            return
         await self.event.emit(
             "cronEvent",
             {

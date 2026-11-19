@@ -266,7 +266,9 @@ class UnsProxyProcessSync:
         self.stop(drain=drain, timeout=timeout)
 
     def set_active(self, active: bool) -> None:
-        self._process.set_active(active)
+        async def update() -> None:
+            self._process.set_active(active)
+        self._loop_thread.run(update())
 
     def create_mqtt_proxy(
         self,
@@ -307,6 +309,9 @@ class UnsProxyProcessSync:
         *,
         timeout: Optional[float] = None,
     ) -> UnsMqttProxySync:
+        parameters = UnsParameters.from_mapping(uns_parameters) if isinstance(uns_parameters, Mapping) else uns_parameters
+        if parameters is not None and parameters.managed_input:
+            raise ValueError("Managed MQTT input requires the asynchronous UnsProxyProcess API")
         proxy = self._loop_thread.run(
             self._process.create_uns_mqtt_proxy(
                 mqtt_host,

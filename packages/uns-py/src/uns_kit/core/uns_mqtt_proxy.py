@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from collections.abc import Awaitable
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from .client import UnsMqttClient
 from .logger import get_logger
 from .packet import UnsPacket, isoformat
 from .proxy import UnsProxy
 from .topic_builder import TopicBuilder
+from .managed_input import ManagedMqttInput, ManagedInputError
 
 logger = get_logger(__name__)
 
@@ -59,6 +62,15 @@ class UnsMqttProxy(UnsProxy):
         max_reconnect_interval: float = 30.0,
         publish_concurrency: int = 32,
         max_pending_publishes: Optional[int] = None,
+        managed_input: bool = False,
+        mqtt_sub_to_topics: list[str] | None = None,
+        max_pending_inputs: int = 64,
+        max_input_bytes: int = 8 * 1024 * 1024,
+        max_input_message_bytes: int = 1024 * 1024,
+        input_ownership_gate: Callable[[], bool] | None = None,
+        strict_publish_drain: bool = False,
+        publish_backpressure: int | None = None,
+        publish_qos: int = 0,
     ) -> None:
         self.topic_builder = TopicBuilder(package_name, package_version, process_name)
         self.instance_status_topic = self.topic_builder.instance_status_topic(instance_name)
@@ -97,33 +109,134 @@ class UnsMqttProxy(UnsProxy):
         self._pending_publish_completions = 0
         self._drain_condition = asyncio.Condition()
         self._publish_worker_failure: Exception | None = None
+        self._strict_publish_drain = strict_publish_drain or managed_input
+        self._publish_failure: Exception | None = None
+        self._stop_requested = False
+        self._publishes_closing = False
+        self._stop_task: asyncio.Task | None = None
+        self._close_task: asyncio.Task | None = None
+        if input_ownership_gate is not None and not callable(input_ownership_gate):
+            raise TypeError("Input ownership gate must be callable")
+        self._input_gate = input_ownership_gate or (lambda: True)
+        self._input_topics = mqtt_sub_to_topics
+        if publish_backpressure is not None and (type(publish_backpressure) is not int or publish_backpressure < 1 or self._max_pending_publishes is None):
+            raise ValueError("publish_backpressure requires a positive waiter bound and bounded publisher queue")
+        self._publish_backpressure = publish_backpressure
+        if type(publish_qos) is not int or publish_qos not in (0, 1, 2):
+            raise ValueError("publish_qos must be 0, 1 or 2")
+        self._publish_qos = publish_qos
+        self._handover_frozen = False
+        self._capacity_waiters = 0
+        self._managed_input = ManagedMqttInput(self.client, max_pending=max_pending_inputs, max_bytes=max_input_bytes, max_message_bytes=max_input_message_bytes) if managed_input else None
 
     async def connect(self) -> None:
+        if self._stop_requested:
+            raise RuntimeError("MQTT proxy is stopping or stopped")
         await self.client.connect()
+        if self._stop_requested:
+            await self.client.close()
+            raise RuntimeError("MQTT proxy stopped during startup")
         self._ensure_publish_workers_started()
         await self.start()
 
     async def stop(self, *, drain: bool = True, timeout: Optional[float] = DEFAULT_DRAIN_TIMEOUT_S) -> None:
+        self._stop_requested = True
+        self.begin_input_release()
+        if self._stop_task is None:
+            self._stop_task = asyncio.create_task(self._perform_stop(drain=drain, timeout=timeout))
+            self._stop_task.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+        task = self._stop_task
+        try:
+            await asyncio.shield(task)
+        except Exception:
+            if self._stop_task is task:
+                self._stop_task = None
+            raise
+
+    async def _perform_stop(self, *, drain: bool, timeout: Optional[float]) -> None:
+        await self.drain_input_for_stop(timeout=timeout)
+        self._publishes_closing = True
+        if self._strict_publish_drain and self._publish_failure is not None:
+            raise RuntimeError("MQTT publish outcome is unconfirmed") from self._publish_failure
         await self._stop_publish_workers(drain=drain, timeout=timeout)
         await super().stop()
 
     async def close(self, *, drain: bool = True, timeout: Optional[float] = DEFAULT_DRAIN_TIMEOUT_S) -> None:
-        await self.stop(drain=drain, timeout=timeout)
-        await self.client.close()
+        if self._close_task is None:
+            async def finish() -> None:
+                await self.stop(drain=drain, timeout=timeout)
+                await self.client.close()
+            self._close_task = asyncio.create_task(finish())
+            self._close_task.add_done_callback(lambda task: None if task.cancelled() else task.exception())
+        task = self._close_task
+        try:
+            await asyncio.shield(task)
+        except Exception:
+            if self._close_task is task:
+                self._close_task = None
+            raise
+
+    def set_input_handler(self, handler: Callable[[Any], Awaitable[None]]) -> None:
+        if self._managed_input is None:
+            raise ManagedInputError("Declare managed_input before registering a handler")
+        self._managed_input.set_handler(handler)
+
+    def setInputHandler(self, handler: Callable[[Any], Awaitable[None]]) -> None:
+        self.set_input_handler(handler)
+
+    async def start_input(self, topics: str | list[str] | None = None, *, qos: int = 1, timeout: float | None = DEFAULT_DRAIN_TIMEOUT_S) -> None:
+        if self._managed_input is None or self._stop_requested or not self._has_input_owner():
+            raise ManagedInputError("Managed MQTT input has no active owner")
+        selected = topics if topics is not None else self._input_topics
+        if selected is None:
+            raise ValueError("Declare MQTT input topics before startup")
+        await self._managed_input.start(selected, qos=qos, timeout=timeout)
+
+    def get_input_readiness(self) -> bool:
+        return self._managed_input is not None and self._managed_input.ready and self._has_input_owner()
+
+    def _has_input_owner(self) -> bool:
+        try:
+            owned = self._input_gate()
+            if inspect.iscoroutine(owned):
+                owned.close()
+            return owned is True
+        except Exception:
+            return False
+
+    def get_input_status(self) -> dict[str, Any]:
+        if self._managed_input is None:
+            return {"managed": False, "ready": False}
+        status = self._managed_input.status()
+        status["ready"] = self.get_input_readiness()
+        return status
+
+    def get_failed_input(self) -> Any:
+        return deepcopy(self._managed_input.failed_message) if self._managed_input is not None else None
+
+    def begin_input_release(self) -> None:
+        if self._managed_input is not None:
+            self._managed_input.begin_release()
+
+    async def drain_input_for_stop(self, timeout: float | None = DEFAULT_DRAIN_TIMEOUT_S) -> None:
+        if self._managed_input is not None:
+            await self._managed_input.drain(timeout)
 
     async def publish_message(self, topic: str, payload: str | bytes) -> None:
-        await self._track_enqueue_operation(self._enqueue_publish(topic, payload))
+        await self._track_enqueue_operation(lambda: self._enqueue_publish(topic, payload))
 
     async def publish_packet(self, topic: str, packet: Dict[str, Any]) -> None:
-        await self._track_enqueue_operation(self._enqueue_publish(topic, UnsPacket.to_json(packet)))
+        await self._track_enqueue_operation(lambda: self._enqueue_publish(topic, UnsPacket.to_json(packet)))
 
     async def publish_mqtt_message(self, mqtt_message: Dict[str, Any], mode: MessageMode = MessageMode.RAW) -> None:
-        await self._track_enqueue_operation(self._publish_mqtt_message_impl(mqtt_message, mode))
+        await self._track_enqueue_operation(lambda: self._publish_mqtt_message_impl(mqtt_message, mode))
 
     async def drain_publishes(self, *, timeout: Optional[float] = None) -> None:
         deadline = None if timeout is None else asyncio.get_running_loop().time() + timeout
         while True:
             async with self._drain_condition:
+                if self._strict_publish_drain and self._publish_failure is not None:
+                    raise RuntimeError("MQTT publish outcome is unconfirmed") from self._publish_failure
                 if self._pending_enqueue_operations == 0 and self._pending_publish_completions == 0:
                     return
                 self._raise_if_drain_blocked()
@@ -375,8 +488,13 @@ class UnsMqttProxy(UnsProxy):
             try:
                 if item is None:
                     return
-                await self.client.publish_raw(item.topic, item.payload)
+                if self._publish_qos:
+                    await self.client.publish_once_raw(item.topic, item.payload, qos=self._publish_qos)
+                else:
+                    await self.client.publish_raw(item.topic, item.payload)
             except Exception as exc:
+                if self._strict_publish_drain and self._publish_failure is None:
+                    self._publish_failure = exc
                 logger.exception("Error publishing message to topic %s", item.topic if item else "<shutdown>")
                 await self.event.emit(
                     "error",
@@ -393,12 +511,25 @@ class UnsMqttProxy(UnsProxy):
 
     async def _enqueue_publish(self, topic: str, payload: str | bytes) -> None:
         self._ensure_publish_workers_started()
-        try:
-            self._publish_queue.put_nowait(QueuedPublish(topic=topic, payload=payload))
-        except asyncio.QueueFull as exc:
-            queue_limit = self._max_pending_publishes if self._max_pending_publishes is not None else "unbounded"
-            raise RuntimeError(f"{self._instance_name} - Publisher queue is full ({queue_limit}).") from exc
+        item = QueuedPublish(topic=topic, payload=payload)
         await self._mark_publish_accepted()
+        try:
+            if self._publish_queue.full() and self._publish_backpressure is not None:
+                if self._capacity_waiters >= self._publish_backpressure:
+                    raise RuntimeError("MQTT publisher capacity waiter limit exceeded")
+                self._capacity_waiters += 1
+                try:
+                    await self._publish_queue.put(item)
+                finally:
+                    self._capacity_waiters -= 1
+            else:
+                self._publish_queue.put_nowait(item)
+        except asyncio.QueueFull as error:
+            await self._mark_publish_completed()
+            raise RuntimeError(f"{self._instance_name} - Publisher queue is full ({self._max_pending_publishes}).") from error
+        except BaseException:
+            await self._mark_publish_completed()
+            raise
 
     async def _process_and_publish(self, msg: Dict[str, Any], *, value_is_cumulative: bool) -> None:
         self._resolve_object_identity(msg)
@@ -507,15 +638,19 @@ class UnsMqttProxy(UnsProxy):
         else:
             raise ValueError("packet.message must include data or table")
 
-    async def _track_enqueue_operation(self, operation: Awaitable[None]) -> None:
+    async def _track_enqueue_operation(self, operation: Callable[[], Awaitable[None]]) -> None:
+        if self._handover_frozen:
+            raise RuntimeError("Handover owner has no output admission")
         await self._increment_pending_enqueues()
         try:
-            await operation
+            await operation()
         finally:
             await self._decrement_pending_enqueues()
 
     async def _increment_pending_enqueues(self) -> None:
         async with self._drain_condition:
+            if self._publishes_closing:
+                raise RuntimeError("MQTT output admission is closed")
             self._pending_enqueue_operations += 1
             self._drain_condition.notify_all()
 

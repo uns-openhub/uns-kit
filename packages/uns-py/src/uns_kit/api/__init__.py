@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from .data_catalog import project_rows_for_data_catalog_schema, write_schema_rows_to_parquet
 from .proxy import ApiEventContext, ApiProxyOptions, GetEndpointOptions, PostEndpointOptions, QueryParamDef, UnsApiProxy
+from .service_authority import ServiceApiAuthority, ServiceAuthorizationError, has_service_authorization_hint
+from .request_lifecycle import HttpRequestDrainError
 from .event_routing import register_api_catalog, register_api_events, register_api_interactions, resolve_api_handler_path
 from .interfaces import (
     ApiInteractionDefinition,
@@ -30,6 +32,10 @@ from .interfaces import (
 
 __all__ = [
     "UnsApiProxy",
+    "HttpRequestDrainError",
+    "ServiceApiAuthority",
+    "ServiceAuthorizationError",
+    "has_service_authorization_hint",
     "ApiProxyOptions",
     "GetEndpointOptions",
     "PostEndpointOptions",

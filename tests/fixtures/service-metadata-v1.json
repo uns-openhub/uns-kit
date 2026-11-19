@@ -1,0 +1,66 @@
+[
+  {
+    "processName": "meter-reader",
+    "processId": "process-a",
+    "now": "2026-05-01T08:00:00.000Z",
+    "metadata": {
+      "serviceId": " example-meter-reader ",
+      "kind": "addon",
+      "addonId": " example-meter-reader ",
+      "packageName": "example-meter-reader",
+      "packageVersion": "1.2.3",
+      "capabilities": [" reader ", "history", "reader", " "],
+      "apiRoutes": [
+        { "path": " /api/example/health ", "kind": "health", "swaggerPath": " " },
+        { "path": " " }
+      ],
+      "controller": { "name": " controller-a ", "publicBase": " http://localhost:3200 " },
+      "extra": { "dependencies": [{ "id": "input", "state": "unknown", "healthy": null }] }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "serviceId": "example-meter-reader",
+      "kind": "addon",
+      "addonId": "example-meter-reader",
+      "packageName": "example-meter-reader",
+      "packageVersion": "1.2.3",
+      "processName": "meter-reader",
+      "processId": "process-a",
+      "capabilities": ["reader", "history"],
+      "apiRoutes": [{ "path": "/api/example/health", "kind": "health" }],
+      "controller": { "name": "controller-a", "publicBase": "http://localhost:3200" },
+      "extra": { "dependencies": [{ "id": "input", "state": "unknown", "healthy": null }] },
+      "publishedAt": "2026-05-01T08:00:00.000Z"
+    }
+  },
+  {
+    "processName": "inventory-worker",
+    "processId": "process-b",
+    "now": "2026-05-02T09:00:00.000Z",
+    "metadata": {
+      "serviceId": "warehouse-inventory",
+      "kind": "service",
+      "label": " Inventory worker ",
+      "instanceId": " instance-b ",
+      "healthPath": " /api/inventory/health ",
+      "packageName": "warehouse-inventory",
+      "packageVersion": "4.5.6",
+      "controller": { "name": " " }
+    },
+    "expected": {
+      "schemaVersion": 1,
+      "serviceId": "warehouse-inventory",
+      "kind": "service",
+      "label": "Inventory worker",
+      "instanceId": "instance-b",
+      "healthPath": "/api/inventory/health",
+      "packageName": "warehouse-inventory",
+      "packageVersion": "4.5.6",
+      "processName": "inventory-worker",
+      "processId": "process-b",
+      "capabilities": [],
+      "apiRoutes": [],
+      "publishedAt": "2026-05-02T09:00:00.000Z"
+    }
+  }
+]

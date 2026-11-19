@@ -53,3 +53,11 @@ def test_service_token_provider_uses_direct_development_sources_in_order() -> No
         fallback=_Fallback(),
     ).get_access_token() == "config-token"
     assert ServiceTokenProvider(environment={}, fallback=_Fallback()).get_access_token() == "legacy-token"
+
+
+def test_explicit_empty_provider_never_falls_back_to_human_login(monkeypatch) -> None:
+    from uns_kit.core.auth_client import AuthClient
+    monkeypatch.setattr(AuthClient, "create", lambda: pytest.fail("implicit human login"))
+    client = UnsClient("https://example.invalid", token_provider=ServiceTokenProvider(environment={}))
+    with pytest.raises(RuntimeError, match="Service credential unavailable"):
+        client.ensure_token()

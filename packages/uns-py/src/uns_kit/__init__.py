@@ -9,6 +9,7 @@ from .api import (
     PostEndpointOptions,
     QueryParamDef,
     UnsApiProxy,
+    HttpRequestDrainError,
 )
 from .core import (
     AccessTokenProvider,
@@ -24,6 +25,11 @@ from .core import (
     InfisicalResolverOptions,
     LastValueResult,
     MessageMode,
+    ProcessWork,
+    ProcessLifecycleHooks,
+    ProcessShutdownError,
+    UnsServiceMetadataInput,
+    build_uns_service_metadata,
     RangeQuery,
     RangeResult,
     RUNTIME_METADATA,
@@ -37,8 +43,15 @@ from .core import (
     TablePayload,
     TopicBuilder,
     UnsClient,
+    AsyncUnsClient,
+    AsyncCapacityError,
+    AsyncClientClosedError,
+    BackgroundServiceAccessDeclaration,
+    parse_background_service_access_declaration,
+    load_background_service_access_declaration,
     UnsMqttClient,
     UnsMqttProxy,
+    ManagedInputError,
     UnsMqttProxySync,
     UnsPacket,
     UnsParameters,
@@ -69,6 +82,8 @@ from .core import (
 from .cron import CronProxyOptions, CronSchedule, CronScheduleInput, UnsCronProxy
 from .database import (
     DatabaseClient,
+    AsyncDatabaseClient,
+    create_async_database_client,
     DatabaseConnectionConfig,
     DatabaseDialect,
     DatabaseExecuteResult,
@@ -88,6 +103,9 @@ from .database import (
     resolve_sql_file_path,
 )
 from .version import __version__
+from .core.durable_journal import DurableInputJournal, JournalRecord, JournalError, JournalCapacityError, JournalOwnershipError
+from .core.durable_input import DurableMqttReceiver, JournalInput
+from .core.journal_handover import ApplicationHandoverState, JournalHandover, create_application_handover_contract
 
 if sys.platform.startswith("win"):
     try:
@@ -98,6 +116,8 @@ if sys.platform.startswith("win"):
         pass
 
 __all__ = [
+    "DurableInputJournal", "JournalRecord", "JournalError", "JournalCapacityError", "JournalOwnershipError",
+    "DurableMqttReceiver", "JournalInput", "ApplicationHandoverState", "JournalHandover", "create_application_handover_contract",
     "ConfigFile",
     "base_config_schema",
     "compose_config_schema",
@@ -121,13 +141,20 @@ __all__ = [
     "UnsMqttClient",
     "StatusMonitor",
     "UnsMqttProxy",
+    "ManagedInputError",
     "UnsMqttProxySync",
     "MessageMode",
+    "ProcessWork",
+    "ProcessLifecycleHooks",
+    "ProcessShutdownError",
+    "UnsServiceMetadataInput",
+    "build_uns_service_metadata",
     "UnsProxyProcess",
     "UnsProxyProcessSync",
     "UnsProcessParameters",
     "UnsParameters",
     "UnsApiProxy",
+    "HttpRequestDrainError",
     "ApiProxyOptions",
     "GetEndpointOptions",
     "PostEndpointOptions",
@@ -138,6 +165,12 @@ __all__ = [
     "CronSchedule",
     "CronScheduleInput",
     "UnsClient",
+    "AsyncUnsClient",
+    "AsyncCapacityError",
+    "AsyncClientClosedError",
+    "BackgroundServiceAccessDeclaration",
+    "parse_background_service_access_declaration",
+    "load_background_service_access_declaration",
     "UnsClientManager",
     "AccessTokenProvider",
     "ServiceTokenProvider",
@@ -165,6 +198,8 @@ __all__ = [
     "DatabaseDialect",
     "SqlParams",
     "DatabaseClient",
+    "AsyncDatabaseClient",
+    "create_async_database_client",
     "DatabaseQueryResult",
     "DatabaseExecuteResult",
     "DatabaseConnectionConfig",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .client import DatabaseManager, create_database_client, get_database, get_database_manager, register_database
+from .async_client import AsyncDatabaseClient, create_async_database_client
 from .params import ORACLE_IN_LIST_LIMIT, compile_named_params
 from .schema import (
     DatabaseConnectionConfig,
@@ -25,6 +26,8 @@ __all__ = [
     "DatabaseQueryResult",
     "DatabaseExecuteResult",
     "DatabaseClient",
+    "AsyncDatabaseClient",
+    "create_async_database_client",
     "PostgresDatabaseConfig",
     "SqliteDatabaseConfig",
     "OracleDatabaseConfig",
