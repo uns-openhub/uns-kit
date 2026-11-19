@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 
 import pytest
 
@@ -20,6 +21,7 @@ from uns_kit.api import (
     write_schema_rows_to_parquet,
 )
 from uns_kit.core import TopicBuilder
+from uns_kit.core.proxy import UnsProxy
 
 
 class _FakeClient:
@@ -208,3 +210,41 @@ def test_resolve_api_handler_path_strips_api_prefix() -> None:
 
     assert resolve_api_handler_path(_ApiInput(), "/api/projects/demo/path") == "projects/demo/path"
     assert resolve_api_handler_path(_ApiInput(), "/projects/demo/path") == "projects/demo/path"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("package,process,topic,asset", [
+    ("test-app", "test-process", "enterprise/site/", "line-1"),
+    ("weather-reader", "weather-local", "campus/north/", "weather-station"),
+])
+async def test_default_api_registry_uses_controller_topic_on_register_and_remove(
+    package, process, topic, asset,
+) -> None:
+    client = _FakeClient()
+    status_topic = f"uns-infra/{package}/1-0-0/{process}/api/"
+    proxy = UnsProxy(client, status_topic, "api")
+    events = []
+
+    async def observe(event):
+        events.append(event)
+
+    proxy.event.on("unsProxyProducedApiEndpoints", observe)
+    endpoint = {
+        "topic": topic, "asset": asset,
+        "objectType": "motor", "objectId": "main", "attribute": "status",
+        "apiMethod": "GET", "apiHost": "http://127.0.0.1:9000",
+        "apiEndpoint": f"/api/{topic}{asset}/motor/main/status",
+    }
+    await proxy.register_api_endpoint(endpoint)
+    registry_topic, payload, retained = client.published[-1]
+    assert registry_topic == status_topic + "api-endpoints"
+    assert retained is True
+    assert json.loads(payload) == [endpoint]
+    assert events[-1]["statusTopic"] == registry_topic
+
+    await proxy.unregister_api_endpoint(
+        topic, asset, "motor", "main", "status", "GET"
+    )
+    assert client.published[-1] == (registry_topic, "[]", True)
+    assert events[-1]["producedApiEndpoints"] == []
+    assert events[-1]["statusTopic"] == registry_topic

@@ -1,5 +1,17 @@
 # Python SDK migrations
 
+## Crossing <0.2.11 to >=0.2.11
+
+Default API endpoint metadata now publishes retained snapshots on the Controller
+registry topic `uns-infra/<package>/<version>/<process>/<instance>/api-endpoints`,
+matching TypeScript. Earlier Python versions used the unrecognized `/api` suffix.
+Endpoint registration events report the corrected topic too; endpoint removal
+publishes the remaining snapshot on that same topic. Custom metadata consumers
+must subscribe to `/api-endpoints`. Handler URLs and API authorization are unchanged.
+
+Provision the declared parent UNS topic before exposing tree-backed API endpoints
+on a fresh Controller. No ETL business-code changes are required for this fix.
+
 ## Crossing <0.2.10 to >=0.2.10
 
 Durable input and same-host journal hot handover are explicit opt-ins. Existing
