@@ -1,5 +1,6 @@
 import { MQTT_HANDOVER_STATE_FORMAT, mqttProxyHandoverStateSchema, type MqttProxyHandoverState } from "../runtime/mqtt-handover-state.js";
 import { inputPreviewSchema, type InputQueueCursor } from "../runtime/input-queue-boundary.js";
+import type { QueueObservation } from "../runtime/queued-handover.js";
 import { assertDisabledPublishQueueEmpty } from "./disabled-publish-queue.js";
 import { randomUUID, createHash } from "node:crypto";
 import { mqttPublishQueueIdentity, mqttPublishQueueSchema, type MqttPublishQueueStatus } from "./publish-queue-contract.js";
@@ -15,7 +16,7 @@ import { getObjectTypeDescription, type UnsObjectId, type UnsObjectType } from "
 import type { UnsAsset } from "../uns/uns-asset.js";
 import { MeasurementUnit } from "../uns/uns-measurements.js";
 import { UnsPacket } from "../uns/uns-packet.js";
-import { IMqttParameters, IMqttWorkerData } from "./mqtt-interfaces.js";
+import { IMqttWorkerData, MqttWorkerParameters } from "./mqtt-interfaces.js";
 import { MqttTopicBuilder } from "./mqtt-topic-builder.js";
 import UnsProxy from "../uns/uns-proxy.js";
 import { UnsAttributeType } from "../graphql/schema.js";
@@ -113,6 +114,8 @@ export default class UnsMqttProxy extends UnsProxy {
   private expectedWorkerExit = false;
   private publishQueueStatus?: MqttPublishQueueStatus;
   private publishesSealed = false;
+  private queuedHandoverOutputHeld: boolean;
+  private queuedHandoverNamespace?: { identity: string; capacityAvailable: boolean; observedAt: number };
   private admissionBytes = new Map<string, number>();
   private pendingAdmissionBytes = 0;
   private capacityWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
@@ -120,7 +123,7 @@ export default class UnsMqttProxy extends UnsProxy {
   private inputHandler?: (event: UnsEvents["input"]) => Promise<void>;
   private pendingManagedInput?: { id: string; event: UnsEvents["input"] };
   private managedInputFailure?: Error;
-  private queueRequests = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout>; readResult?: (value: unknown) => void }>();
+  private queueRequests = new Map<string, { resolve: () => void; reject: (error: Error) => void; timer?: ReturnType<typeof setTimeout>; readResult?: (value: unknown) => void }>();
 
 
   constructor(
@@ -129,10 +132,12 @@ export default class UnsMqttProxy extends UnsProxy {
     instanceName: string,
     unsParameters?: IUnsParameters,
     publisherActive: boolean = false,
-    subscriberActive: boolean = false
+    subscriberActive: boolean = false,
+    queuedHandoverTarget: boolean = false,
   ) {
     super();
     this.instanceName = instanceName;
+    this.queuedHandoverOutputHeld = queuedHandoverTarget;
     const contract = unsParameters?.handoverStateContract;
     if (contract !== undefined && (typeof contract !== "string" || !contract.trim() || contract.length > 256)) throw Error("Invalid MQTT state compatibility contract");
     // Bind state to semantic revision and actual endpoints/subscriptions, never credentials or client IDs.
@@ -155,7 +160,7 @@ export default class UnsMqttProxy extends UnsProxy {
     // Concatenate processName with instanceName for the worker identification.
     this.instanceNameWithSuffix = `${processName}-${instanceName}`;
     
-    const mqttParameters: IMqttParameters = {
+    const mqttParameters: MqttWorkerParameters = {
       mqttSubToTopics: unsParameters?.mqttSubToTopics ?? [],
       username: unsParameters?.username ?? "",
       password: unsParameters?.password ?? "",
@@ -181,6 +186,14 @@ export default class UnsMqttProxy extends UnsProxy {
       servername: unsParameters?.servername,
     };
     this.unsParameters = { ...(unsParameters ?? {}) };
+    if (unsParameters?.queuedHandoverQos0Input) {
+      if (!unsParameters.managedInput || unsParameters.clean === false || (unsParameters.properties?.sessionExpiryInterval ?? 0) !== 0)
+        throw Error("Queued QoS 0 input requires a managed input handler and a clean session without expiry");
+      mqttParameters.queuedHandoverQos0Input = queuedHandoverTarget ? "held" : "open";
+      mqttParameters.clean = true;
+      mqttParameters.resubscribe = false;
+      mqttParameters.properties = { ...mqttParameters.properties, sessionExpiryInterval: 0 };
+    }
     if (unsParameters?.publishBackpressure) {
       const max = unsParameters.maxPendingPublishes;
       const waiting = unsParameters.publishBackpressure.maxWaiting ?? 32;
@@ -197,7 +210,7 @@ export default class UnsMqttProxy extends UnsProxy {
       } else this.unsParameters.publishQueue = queue;
       if ((unsParameters.publishConcurrency ?? 1) !== 1) throw Error("Persistent MQTT output requires publishConcurrency=1");
     }
-    this.startQueueWorker(mqttHost, this.instanceNameWithSuffix, mqttParameters, publisherActive, subscriberActive);
+    this.startQueueWorker(mqttHost, this.instanceNameWithSuffix, mqttParameters, !queuedHandoverTarget && publisherActive, !queuedHandoverTarget && subscriberActive);
   }
 
   /**
@@ -252,7 +265,7 @@ export default class UnsMqttProxy extends UnsProxy {
   private startQueueWorker(
     mqttHost: string,
     instanceNameWithSuffix: string,
-    mqttParameters: IMqttParameters,
+    mqttParameters: MqttWorkerParameters,
     publisherActive: boolean,
     subscriberActive: boolean
   ): void {
@@ -372,6 +385,9 @@ export default class UnsMqttProxy extends UnsProxy {
     }
     return new Promise((resolve, reject) => {
       if (this.publishesSealed) { reject(Error("MQTT output admission is sealed after clean migration drain")); return; }
+      if (this.queuedHandoverOutputHeld && this.unsParameters.publishQueue?.mode !== "durable") {
+        reject(Error("MQTT output admission requires a durable outbox during queued handover")); return;
+      }
       if (this.lifecycleState !== "running") {
         reject(new Error(`${this.instanceNameWithSuffix} - MQTT proxy is ${this.lifecycleState}; publish rejected.`));
         return;
@@ -419,6 +435,33 @@ export default class UnsMqttProxy extends UnsProxy {
     if (pending) void this.handleManagedInput(pending.id, pending.event);
   }
 
+  public async closeQueuedHandoverQos0Input(): Promise<{ closedAt: number }> {
+    if (!this.unsParameters.queuedHandoverQos0Input || !this.inputHandler || this.managedInputFailure)
+      throw Error("Queued QoS 0 input requires a healthy registered managed handler");
+    const result = await this.subscriberQuery("closeQueuedHandoverQos0Input", undefined, null) as { closedAt?: number };
+    if (!Number.isSafeInteger(result?.closedAt) || result.closedAt! <= 0 || this.managedInputFailure)
+      throw Error("Queued QoS 0 input closure is unconfirmed");
+    return { closedAt: result.closedAt! };
+  }
+
+  public async openQueuedHandoverQos0Input(): Promise<{ openedAt: number }> {
+    if (!this.unsParameters.queuedHandoverQos0Input || !this.inputHandler || this.managedInputFailure)
+      throw Error("Queued QoS 0 input requires a healthy registered managed handler");
+    const result = await this.subscriberQuery("openQueuedHandoverQos0Input", undefined, 7000) as { openedAt?: number };
+    if (!Number.isSafeInteger(result?.openedAt) || result.openedAt! <= 0 || this.managedInputFailure)
+      throw Error("Queued QoS 0 input opening is unconfirmed");
+    return { openedAt: result.openedAt! };
+  }
+
+  public hasQueuedHandoverQos0Input(): boolean {
+    return this.unsParameters.queuedHandoverQos0Input === true;
+  }
+
+  public queuedHandoverQos0InputReady(subscribed: boolean): boolean {
+    return Boolean(this.inputHandler && !this.managedInputFailure &&
+      (subscribed ? this.getInputReadiness() : this.getConnectionReadiness()));
+  }
+
   private async handleManagedInput(id: unknown, event: UnsEvents["input"]): Promise<void> {
     if (typeof id !== "string") return;
     try {
@@ -439,7 +482,49 @@ export default class UnsMqttProxy extends UnsProxy {
    * @param referenceHash - Optional reference hash.
    */
   public setPublisherActive(batchSize?: number, referenceHash?: string): void {
+    if (this.queuedHandoverOutputHeld) throw Error("MQTT output is held by a queued handover");
     this.worker.postMessage({ command: "setPublisherActive", batchSize, referenceHash });
+  }
+
+  public async observeQueuedHandoverOutput(): Promise<QueueObservation | undefined> {
+    if (!this.unsParameters.publishQueue) return;
+    const id = `mqtt-outbox:${createHash("sha256").update(this.instanceName).digest("hex")}`;
+    const base = { id, purpose: "MQTT publish acknowledgement", unit: "mqtt-records" };
+    try {
+      const value = await this.subscriberQuery("observeQueuedHandoverOutput") as {
+        snapshot: MqttPublishQueueStatus; observedAt: number; managed?: { identity?: string; capacityAvailable: boolean };
+      };
+      if (value.snapshot.state !== "blocked" && value.snapshot.state !== "closed") {
+        const managed = value.managed;
+        this.queuedHandoverNamespace = managed?.identity && /^[a-f0-9]{64}$/.test(managed.identity) ?
+          { identity: managed.identity, capacityAvailable: managed.capacityAvailable, observedAt: value.observedAt } : undefined;
+        if (this.pendingEnqueues.size === 0)
+          return { ...base, pending: value.snapshot.pendingRecords, inFlight: Number(value.snapshot.inFlight), quality: "exact", observedAt: value.observedAt };
+        return { ...base, pending: null, inFlight: null, quality: "unknown", observedAt: value.observedAt };
+      }
+    } catch { /* Unknown worker state cannot establish a clean drain. */ }
+    this.queuedHandoverNamespace = undefined;
+    return { ...base, pending: null, inFlight: null, quality: "unknown", observedAt: Date.now() };
+  }
+
+  public getQueuedHandoverManagedNamespace() {
+    if (this.workerFailure || this.lifecycleState !== "running" || !this.queuedHandoverNamespace) return;
+    const { identity, capacityAvailable, observedAt } = this.queuedHandoverNamespace;
+    if (Date.now() - observedAt <= 10_000) return { identity, capacityAvailable };
+  }
+
+  public assertQueuedHandoverOutputHeld(): void {
+    if (!this.queuedHandoverOutputHeld || this.workerFailure) throw Error("MQTT output hold is unconfirmed");
+  }
+
+  public hasConfiguredQueuedOutput(): boolean {
+    return Boolean(this.unsParameters.publishQueue);
+  }
+
+  public async releaseQueuedHandoverOutput(): Promise<void> {
+    if (!this.queuedHandoverOutputHeld) throw Error("MQTT output lacks its queued handover hold");
+    await this.subscriberQuery("releaseQueuedHandoverOutput");
+    this.queuedHandoverOutputHeld = false;
   }
 
   /**
@@ -512,12 +597,14 @@ export default class UnsMqttProxy extends UnsProxy {
     return result;
   }
 
-  private subscriberQuery(command: string, preview?: unknown): Promise<unknown> {
+  private subscriberQuery(command: string, preview?: unknown, timeoutMs: number | null = 5000): Promise<unknown> {
     if (this.workerFailure) return Promise.reject(this.workerFailure);
     if (this.queueRequests.size >= 64) return Promise.reject(Error("Too many pending MQTT controls"));
     const id = randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.queueRequests.delete(id); reject(Error("MQTT input boundary review timed out")); }, 5000);
+      const timer = timeoutMs === null ? undefined : setTimeout(() => {
+        this.queueRequests.delete(id); reject(Error("MQTT input boundary review timed out"));
+      }, timeoutMs);
       this.queueRequests.set(id, { resolve: () => {}, reject, timer, readResult: resolve });
       try { this.worker.postMessage({ command, id, preview }); }
       catch (error) { clearTimeout(timer); this.queueRequests.delete(id); reject(error); }

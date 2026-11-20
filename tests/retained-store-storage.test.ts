@@ -1,11 +1,13 @@
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { available, captureRetained, restoreRetained, runtimeLease } from "../packages/uns-core/src/runtime/retained-store-storage.mjs";
+import { available, captureRetained, restoreRetained, rootLease, runtimeLease } from "../packages/uns-core/src/runtime/retained-store-storage.mjs";
 
 const limits = {
   schemaVersion: 1,
@@ -61,6 +63,69 @@ function fixture() {
   return { base, root, snapshot, id, dir, b };
 }
 describe("shared opaque retained-store offline capture and restore", () => {
+  it("allows independent processes to share an initialized root while keeping store and maintenance locks exclusive", async () => {
+    const first = fixture();
+    const second = fixture();
+    const directory = path.join(first.root, second.id);
+    fs.renameSync(second.dir, directory);
+    const secondBinding = { ...second.b, directory, owner: { ...second.b.owner, instanceId: "two" } };
+    fs.writeFileSync(path.join(directory, "store.json"), JSON.stringify(secondBinding));
+    const module = new URL("../packages/uns-core/src/runtime/retained-store-storage.mjs", import.meta.url).href;
+    const run = (binding: typeof first.b) => {
+      const child = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+        import { runtimeLease } from ${JSON.stringify(module)};
+        const lease = runtimeLease(JSON.parse(process.argv[1]));
+        process.on("message", () => { lease.close(); process.disconnect(); });
+        process.send("owned");
+      `,
+          JSON.stringify(binding),
+        ],
+        { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+      );
+      let diagnostics = "";
+      child.stderr?.on("data", (chunk) => {
+        diagnostics += chunk;
+      });
+      const exit = once(child, "exit");
+      const ready = Promise.race([
+        once(child, "message").then(([message]) => message),
+        exit.then(() => {
+          throw Error(`Lease owner exited before acquiring its store. ${diagnostics}`);
+        }),
+      ]);
+      return { child, ready, exit };
+    };
+    const source = run(first.b);
+    const owners = [source];
+    try {
+      await expect(source.ready).resolves.toBe("owned");
+      const target = run(secondBinding);
+      owners.push(target);
+      await expect(target.ready).resolves.toBe("owned");
+      expect(() => runtimeLease(first.b)).toThrow("owned");
+      expect(() => captureRetained(first.root, first.snapshot, "include", limits)).toThrow("owned");
+      for (const { child } of owners) child.send("release");
+      await expect(Promise.all(owners.map(({ exit }) => exit))).resolves.toEqual([
+        [0, null],
+        [0, null],
+      ]);
+      const releaseMaintenance = rootLease(first.root, true);
+      try {
+        expect(() => runtimeLease(secondBinding)).toThrow("owned");
+      } finally {
+        releaseMaintenance();
+      }
+      expect(captureRetained(first.root, first.snapshot, "include", limits)).toMatchObject({ stores: 2 });
+    } finally {
+      for (const { child } of owners) if (child.exitCode === null) child.kill();
+    }
+  }, 15_000);
+
   it("refuses capture while a runtime owns the store, without modifying work", () => {
     const f = fixture(),
       before = fs.readFileSync(path.join(f.dir, "queue", "work.sqlite"));

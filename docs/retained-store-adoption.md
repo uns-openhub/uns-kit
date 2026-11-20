@@ -76,6 +76,128 @@ request is not a substitute for recovery. Keep the old-side fence after success.
 A direct manual launch of an older binary outside Controller can ignore a fence;
 this protocol protects managed lifecycle and participating SDK consumers.
 
+## Stopped-owner configuration review
+
+Packages can declare neutral scalar tuning in
+`retained-store-configuration.manifest.json` at the installed package root.
+Protocol 1 supports activation on the next start after a confirmed stop.
+For example, an indexing worker could declare this logging threshold.
+
+```json
+{
+  "protocol": 1,
+  "activation": "stopped",
+  "fields": [
+    {
+      "path": ["diagnostics", "level"],
+      "kind": "enum",
+      "values": ["warn", "info"],
+      "dependencies": [["diagnostics", "sink"]]
+    }
+  ]
+}
+```
+
+Each declaration names an existing object field. A rule supports `boolean`,
+`enum` with a fixed list of strings, or `integer` with inclusive `minimum` and
+`maximum`. The old and new values must both satisfy the same rule. Each rule
+lists its dependencies explicitly. These object paths must be present and
+unchanged. An empty list declares that there are no required local configuration
+dependencies. The package attests that tuning leaves source, destination,
+storage format, replay and checkpoint semantics intact. External reference
+resolution and package provenance require separate host checks when relevant.
+
+`readRetainedStoreConfigurationManifest()` returns the validated declaration
+and its exact-file SHA-256 digest. `reviewRetainedStoreConfigurationChange()`
+accepts both complete JSON revisions as UTF-8 bytes or strings. It rejects
+duplicate keys, additions, removals, object and array reordering, and changes
+outside the declared paths. Its result contains field paths only. Review uses
+at most 64 KiB for the declaration and 1 MiB per configuration and rejects
+malformed input, excessive depth and unknown declaration versions. The host
+enforces authorization, artifact and revision identity, confirmed stop,
+maintenance locking and durable application of the reviewed change.
+
+## Queued handover
+
+`runtime/queued-handover.js` provides launch-bound queue observations and a
+durable receipt protocol. A package can advertise
+`unsDatahub.queuedHandover: { "protocolVersion": 1, "inputBoundary": "none" }`
+and call `UnsProxyProcess.enableQueuedHandover()` with an application observer.
+The SDK adds observations from configured MQTT outboxes. Observations carry
+per-queue units, timestamps, and exact, lower-bound, or unknown quality.
+An observer can report queue progress even when a replay boundary is unavailable.
+
+An executable adapter declares `inputBoundary: "durable-replay-v1"`. It
+provides its actual queue identity, an independently verified durable input
+checkpoint, a successor that can resume from that checkpoint, and a durable
+hold for all successor external effects. A bare unsubscribe and resubscribe
+has a gap. The bounded RAM overlap used by ordinary correlated MQTT handover
+cannot establish durable replay. Use `queuedHandoverRetainedStoreIdentity()`
+with the SDK-verified binding for a retained queue.
+
+A package can instead declare `inputBoundary: "mqtt-qos0-gap-v1"` for a
+managed MQTT 5 QoS 0 subscription. The reviewed binding must carry literal
+`acceptedInputLoss: true` and the adapter must attest the actual boundary using
+`closeQueuedHandoverQos0Input()` and `openQueuedHandoverQos0Input()`. The source
+fences local delivery before submitting UNSUBSCRIBE and confirms the broker
+acknowledgement. The successor starts connected and unsubscribed, and its
+local delivery gate opens on the matching successful QoS 0 SUBACK. The receipt
+records `closedAt` and `openedAt`. Messages published during that interval can
+be lost. The successor suppresses retained replay and still admits live retained
+publications. A frozen source remains closed after MQTT reconnect. Gap evidence
+is specific to this policy and cannot satisfy durable replay.
+
+A Controller-launched `UnsProxyProcess` with an SDK publish queue automatically
+reports the queue over launch-bound IPC. A service with one durable managed MQTT
+outbox can call `await owner.enableQueuedHandover({ inputBoundary })` to supply
+its replay proof. The SDK derives the queue identity from the opened Runtime
+mount and owner/queue namespace, holds successor publications, observes
+capacity, and waits for broker acknowledgements. Controller review can use
+`queuedHandoverManagedMqttIdentity()` with the standard
+`managedMqttOutputBinding()`. It reads mount metadata without opening any
+outbox database. An ordinary service with no durable input proof stays in
+observation mode.
+
+The authenticated host binds one operation to the reviewed checksum, both
+launches, and both queue identities. It launches the successor with
+`UNS_QUEUED_HANDOVER_BINDING` and `UNS_QUEUED_HANDOVER_ROLE=target`. The
+successor must establish its application effect hold before registering the
+adapter. The SDK suppresses ordinary MQTT handover and holds publication
+from the target. The host checks the held target before freezing the source.
+The target must report fresh, exact zero counts for every known queue before
+the SDK opens its input. New work can accumulate after the capture receipt.
+The SDK commits receipts in order for source freeze, target capture, source
+drain, and target release. Each receipt pins the durable input boundary and
+the preceding receipt. The host observes source exit before requesting
+target release. The source drains in the background and readers observe
+pending work until the application and SDK queues confirm completion. When a
+bounded application drain leaves known work, the same operation can resume while
+SDK publishes remain available. The runtime seals SDK publishes after confirming
+all application lanes empty. If an effect takes longer than an IPC reply, the
+runtime keeps its durable intent and records any late proof for reconciliation.
+
+An approved source recovery launch uses `UNS_QUEUED_HANDOVER_RECOVERY` with
+the new physical launch ID, same operation ID, and durable frozen receipt
+digest. The application reestablishes its closed input boundary through
+`recoverSourceInput()` before SDK output resumes. The old source remains
+fenced against ordinary startup. A released successor can restart normally
+with identical retained queue identity. It can also become the source of a
+distinct reviewed operation on the same launch and queue identity. Its exact
+release receipt remains retryable until the SDK durably records the new freeze
+intent. An unknown freeze, activation, or release outcome keeps its local fence
+for reconciliation.
+
+An explicitly prepared local draft can receive a new empty store on its
+verified Runtime mount through `prepareEmptyRetainedStore()`. The host persists
+the reviewed draft and binding intent before invoking it. The SDK initializes
+required directory resources, rejects required file resources, and writes a
+fresh-origin receipt before publishing the store and binding. The same draft
+identity, binding, and declaration can resume an interrupted preparation. An
+existing store or draft with data is preserved. `isFreshRetainedStore()` proves
+origin under the application's storage lease. Applications still check their
+own queue and replay-control state before lifting any startup hold. The shared
+backup storage program includes the receipt when capturing the store.
+
 ## Deliberate limits
 
 POSIX same-user, same-filesystem storage only. No cross-host transport, resource

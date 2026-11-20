@@ -15,6 +15,7 @@ export class MqttWorker {
   protected publisher: ThrottledPublisher | MqttPublishQueue;
   protected subscriber: ThrottledSubscriber;
   private defaultPublishOptions?: IClientPublishOptions;
+  private readonly queuedQos0Input: boolean;
   private pendingInput?: { id: string; resolve: () => void; reject: (error: Error) => void };
 
   constructor(workerData: IMqttWorkerData) {
@@ -30,6 +31,7 @@ export class MqttWorker {
     const subscriberActive = workerData.subscriberActive;
     const defaultPublishOptions = workerData.defaultPublishOptions;
     this.defaultPublishOptions = defaultPublishOptions;
+    this.queuedQos0Input = workerData.managedInput === true && Boolean(mqttParameters?.queuedHandoverQos0Input);
 
     // Initialize and start the MQTT proxy.
     this.mqttProxy = new MqttProxy(mqttHost, instanceName, mqttParameters, this);
@@ -160,6 +162,21 @@ export class MqttWorker {
             error: error?.message ?? String(error),
           });
         }
+      } else if (msg?.command === "observeQueuedHandoverOutput" && this.publisher instanceof MqttPublishQueue) {
+        try {
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "success",
+            result: { snapshot: this.publisher.snapshot(), observedAt: Date.now(),
+              managed: this.publisher.handoverNamespace() } });
+        } catch {
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "error", error: "MQTT output observation unavailable" });
+        }
+      } else if (msg?.command === "releaseQueuedHandoverOutput") {
+        try {
+          this.publisher.becomeActive({ batchSize: 0, referenceHash: "" });
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "success" });
+        } catch {
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "error", error: "MQTT output release unconfirmed" });
+        }
       } else if (msg?.command === "flushPublishes" && this.publisher instanceof MqttPublishQueue) {
         try {
           await this.publisher.waitForIdle(msg.timeoutMs);
@@ -176,9 +193,29 @@ export class MqttWorker {
           parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "error", error: "MQTT output could not be safely persisted/closed; worker retained" });
         }
       } else if (msg && msg.command === "subscribeAsync" && msg.topics) {
-        this.mqttProxy.subscribeAsync(msg.topics);
+        void this.mqttProxy.subscribeAsync(msg.topics).catch(() => {
+          parentPort?.postMessage({ command: "publishQueueControlError", error: "MQTT subscription was not confirmed" });
+        });
       } else if (msg && msg.command === "unsubscribeAsync" && msg.topics) {
-        this.mqttProxy.unsubscribeAsync(msg.topics);
+        void this.mqttProxy.unsubscribeAsync(msg.topics).catch(() => {
+          parentPort?.postMessage({ command: "publishQueueControlError", error: "MQTT unsubscribe was not confirmed" });
+        });
+      } else if (msg?.command === "closeQueuedHandoverQos0Input" || msg?.command === "openQueuedHandoverQos0Input") {
+        try {
+          if (!this.queuedQos0Input) throw Error("Queued QoS 0 worker inlet is unavailable");
+          let result: { closedAt: number } | { openedAt: number };
+          if (msg.command === "closeQueuedHandoverQos0Input") {
+            result = await this.mqttProxy.closeQueuedHandoverQos0Input();
+            await this.subscriber.drainQueuedHandoverQos0Input();
+          } else {
+            await this.subscriber.drainQueuedHandoverQos0Input();
+            this.subscriber.becomeActive({ batchSize: 0, referenceHash: "" });
+            result = await this.mqttProxy.openQueuedHandoverQos0Input();
+          }
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "success", result });
+        } catch {
+          parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "error", error: "Queued QoS 0 input boundary is unconfirmed" });
+        }
       } else if (msg?.command === "drainSubscriberInput") {
         try {
           await this.mqttProxy.pauseSubscriptions();
@@ -197,6 +234,7 @@ export class MqttWorker {
         }
       } else if (msg?.command === "prepareSubscriberResume" || msg?.command === "activatePreparedSubscriber") {
         try {
+          if (!this.mqttProxy.permitsOrdinaryInputActivation()) throw Error("Queued handover fences MQTT input");
           if (msg.command === "prepareSubscriberResume") this.subscriber.prepareResume(msg.cursor);
           else this.subscriber.activatePreparedResume();
           parentPort?.postMessage({ command: "publishQueueReply", id: msg.id, status: "success" });
@@ -213,7 +251,10 @@ export class MqttWorker {
           ...snapshot
         });          
       } else if (msg && msg.command === "setSubscriberActive") {
-        try { this.subscriber.becomeActive({batchSize: msg?.batchSize, referenceHash: msg?.referenceHash}); }
+        try {
+          if (!this.mqttProxy.permitsOrdinaryInputActivation()) throw Error("Queued handover fences MQTT input");
+          this.subscriber.becomeActive({batchSize: msg?.batchSize, referenceHash: msg?.referenceHash});
+        }
         catch { parentPort?.postMessage({ command: "publishQueueControlError", error: "MQTT input activation blocked; retained input requires review" }); }
       } else if (msg && msg.command === "setSubscriberPassive") {
         const snapshot = await this.subscriber.becomePassive(3, msg.strict === true);

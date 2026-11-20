@@ -1,3 +1,4 @@
+export const FRESH: "store-fresh.json";
 export function rootLease(root: string, exclusive?: boolean, restoring?: boolean): () => void;
 export function maintenanceLease(directory: string): () => void;
 export function runtimeLease(binding: unknown): { close: () => void };

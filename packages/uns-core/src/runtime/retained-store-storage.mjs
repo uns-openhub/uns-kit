@@ -7,6 +7,7 @@ export const RESTORE_FILE = "retained-store-restore.json";
 export const RESTORE_MANIFEST = "retained-store-restore-manifest.json";
 export const DECLARATION = "store-resources.json";
 export const OPERATION = "store-operation.json";
+export const FRESH = "store-fresh.json";
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const safe = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const hash = /^[a-f0-9]{64}$/;
@@ -71,11 +72,30 @@ export function available(root) {
 }
 function lock(file, exclusive) {
   safePath(file);
-  if (entry(file)) owned(file);
+  try {
+    fs.closeSync(fs.openSync(file, "wx", 0o600));
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  }
+  if (owned(file).mode & 0o077) throw Error("Retained storage lease file must be private");
   const db = new DatabaseSync(file);
   try {
-    fs.chmodSync(file, 0o600);
-    db.exec("PRAGMA busy_timeout=0; PRAGMA journal_mode=DELETE; CREATE TABLE IF NOT EXISTS lease(id INTEGER PRIMARY KEY);");
+    // Existing roots are read here so independent Runtime owners can share the
+    // root lease. Initialization is the only path that needs a schema writer.
+    db.exec("PRAGMA busy_timeout=1500; PRAGMA synchronous=FULL");
+    if (db.prepare("PRAGMA journal_mode").get().journal_mode !== "delete") throw Error("Unexpected retained lease journal mode");
+    const existing = db.prepare("SELECT name FROM sqlite_master WHERE name='lease' AND type='table'");
+    if (!existing.get()) {
+      db.exec("BEGIN IMMEDIATE");
+      if (!existing.get()) {
+        if (db.prepare("SELECT count(*) AS entries FROM sqlite_master").get().entries !== 0)
+          throw Error("Unexpected retained lease database");
+        db.exec("CREATE TABLE lease(id INTEGER PRIMARY KEY)");
+      }
+      db.exec("COMMIT");
+      sync(path.dirname(file));
+    }
+    db.exec("PRAGMA busy_timeout=0");
     db.exec(exclusive ? "BEGIN EXCLUSIVE" : "BEGIN; SELECT count(*) FROM lease;");
   } catch (e) {
     db.close();
@@ -92,7 +112,14 @@ function lock(file, exclusive) {
 export function rootLease(root, exclusive = false, restoring = false) {
   if (restoring) privateRoot(root);
   else available(root);
-  return lock(path.join(root, "retained-root-lease.sqlite"), exclusive);
+  const release = lock(path.join(root, "retained-root-lease.sqlite"), exclusive);
+  try {
+    if (!restoring) available(root);
+    return release;
+  } catch (error) {
+    release();
+    throw error;
+  }
 }
 export function maintenanceLease(directory) {
   const releaseRoot = rootLease(path.dirname(directory));
@@ -122,6 +149,16 @@ function stable(v) {
       : x,
   );
 }
+function verifyFreshReceipt(directory, binding, declaration) {
+  const receipt = readJSON(path.join(directory, FRESH));
+  const manifestDigest = createHash("sha256").update(stable(declaration)).digest("hex");
+  if (
+    !receipt || Object.keys(receipt).length !== 8 || receipt.protocol !== 1 || receipt.kind !== "prepared-empty" ||
+    receipt.storeId !== binding.storeId || receipt.operationId !== binding.operationId || receipt.generation !== binding.generation ||
+    receipt.manifestDigest !== manifestDigest || typeof receipt.bindingDigest !== "string" || !hash.test(receipt.bindingDigest) ||
+    typeof receipt.instanceDigest !== "string" || !hash.test(receipt.instanceDigest)
+  ) throw Error("Invalid fresh retained store receipt");
+}
 const activeLeases = (globalThis[Symbol.for("uns-kit.retained-store.leases.v1")] ??= new Map());
 export function runtimeLease(binding) {
   if (activeLeases.has(binding.directory)) throw Error("Retained store already owned by this process");
@@ -130,7 +167,8 @@ export function runtimeLease(binding) {
     if (entry(path.join(binding.directory, OPERATION))) throw Error("Retained operation is incomplete");
     if (entry(path.join(binding.directory, "store-returned.json"))) throw Error("Retained store is retired");
     const current = readJSON(path.join(binding.directory, "store.json"));
-    declaration(readJSON(path.join(binding.directory, DECLARATION)), binding.format);
+    const declared = declaration(readJSON(path.join(binding.directory, DECLARATION)), binding.format);
+    if (entry(path.join(binding.directory, FRESH))) verifyFreshReceipt(binding.directory, binding, declared);
     if (stable(current) !== stable(binding)) throw Error("Retained owner changed");
     let closed = false;
     const held = {
@@ -201,7 +239,7 @@ function declaration(value, format) {
   for (const r of value.resources) {
     if (
       !safe.test(r.id) ||
-      ["store.json", DECLARATION, OPERATION, "store-lease.sqlite", "store-returned.json"].includes(r.id) ||
+      ["store.json", DECLARATION, OPERATION, FRESH, "store-lease.sqlite", "store-returned.json"].includes(r.id) ||
       ids.has(r.id) ||
       !relative(r.path) ||
       !["file", "directory"].includes(r.kind) ||
@@ -274,12 +312,15 @@ export function captureRetained(root, destination, mode, limits) {
         if (r.operationId !== b.operationId || r.generation !== b.generation)
           throw Error("Uncertain returned store");
       }
-      const allowed = new Set(["store.json", DECLARATION, "store-lease.sqlite", ...(retired?["store-returned.json"]:[]), ...d.resources.map((x) => x.id)]);
+      const fresh = entry(path.join(dir, FRESH));
+      if (fresh) verifyFreshReceipt(dir, b, d);
+      const allowed = new Set(["store.json", DECLARATION, "store-lease.sqlite", ...(fresh ? [FRESH] : []), ...(retired?["store-returned.json"]:[]), ...d.resources.map((x) => x.id)]);
       if (fs.readdirSync(dir).some((n) => !allowed.has(n))) throw Error("Undeclared retained entry");
       fs.mkdirSync(path.join(destination, id), { mode: 0o700 });
       manifest.entries.push({ path: id, type: "directory" });
       copy(path.join(dir, "store.json"), id + "/store.json");
       copy(path.join(dir, DECLARATION), id + "/" + DECLARATION);
+      if (fresh) copy(path.join(dir, FRESH), id + "/" + FRESH);
       if(retired)copy(path.join(dir,"store-returned.json"),id+"/store-returned.json");
       const resources = [];
       for (const r of d.resources) {
@@ -360,14 +401,16 @@ function verifySnapshot(source, limits) {
   for (const st of m.stores) {
     const b = binding(readJSON(path.join(source, st.storeId, "store.json")), m.sourceRoot, st.storeId);
     const declared=declaration(readJSON(path.join(source, st.storeId, DECLARATION)), b.format);
+    const storeDirectory = path.join(source, st.storeId);
+    if (entry(path.join(storeDirectory, FRESH))) verifyFreshReceipt(storeDirectory, b, declared);
     if (st.retired) {
-      const r = readJSON(path.join(source, st.storeId, "store-returned.json"));
+      const r = readJSON(path.join(storeDirectory, "store-returned.json"));
       if (
         r.operationId !== b.operationId ||
         r.generation !== b.generation ||
         m.entries.some(
           (e) =>
-            e.path.startsWith(st.storeId + "/") && !["store.json", DECLARATION, "store-returned.json",...declared.resources.map(r=>r.id)].includes(e.path.slice(st.storeId.length + 1).split("/")[0]),
+            e.path.startsWith(st.storeId + "/") && !["store.json", DECLARATION, FRESH, "store-returned.json",...declared.resources.map(r=>r.id)].includes(e.path.slice(st.storeId.length + 1).split("/")[0]),
         )
       )
         throw Error("Invalid retired-store receipt");

@@ -1,5 +1,9 @@
 import { validateApplicationHandoverContract, type ApplicationHandoverState } from "../runtime/application-handover-state.js";
 import { MQTT_DRAIN_HANDLER, MQTT_DRAIN_READY_EVENT, mqttCooperativeStopRequestSchema, drainMqttForMigration, type MqttDrainReceipt } from "../runtime/mqtt-drain.js";
+import {
+  QueuedHandoverRuntime, queuedHandoverSourceRecoveryLaunch, queuedHandoverTargetLaunch,
+  readQueuedHandoverState, type QueuedHandoverAdapter,
+} from "../runtime/queued-handover.js";
 import { randomBytes } from "crypto";
 
 import logger from "../logger.js";
@@ -44,6 +48,11 @@ class UnsProxyProcess {
   private processName: string;
   private processId: string;
   private handoverId: string | undefined;
+  private readonly queuedHandoverTarget = queuedHandoverTargetLaunch();
+  private readonly queuedHandoverRecovery = queuedHandoverSourceRecoveryLaunch();
+  private queuedHandover?: QueuedHandoverRuntime;
+  private queuedHandoverAutoObserver = false;
+  private queuedHandoverFenced = false;
   private statefulHandover: boolean = false;
   private applicationHandoverState?: ApplicationHandoverState;
   private handoverReady = true;
@@ -130,6 +139,12 @@ class UnsProxyProcess {
   private mqttInputHandler: (event: any) => void;
 
   constructor(mqttHost: string, unsProxyProcessParameters: IUnsProcessParameters) {
+    const priorQueuedHandover = readQueuedHandoverState(process.cwd());
+    if (!this.queuedHandoverTarget && !this.queuedHandoverRecovery && priorQueuedHandover &&
+        (priorQueuedHandover.pending || priorQueuedHandover.role !== "target" ||
+          priorQueuedHandover.evidence.at(-1)?.phase !== "target-released"))
+      throw Error("Previous queued handover still fences this process");
+    if (this.queuedHandoverTarget && this.queuedHandoverRecovery) throw Error("Conflicting queued handover launch roles");
     (this.constructor as typeof UnsProxyProcess).applyAll(); // Activate all the plugins
 
     this.unsMqttProxies = [];
@@ -246,6 +261,7 @@ class UnsProxyProcess {
       this.handoverShutdown,
       this.statefulHandover,
       this.applicationHandoverState,
+      Boolean(this.queuedHandoverTarget || this.queuedHandoverRecovery) || this.queuedHandoverFenced,
     );
 
     // Listen for handover events.
@@ -287,7 +303,11 @@ class UnsProxyProcess {
     if (this.statefulHandover && this.applicationHandoverState) {
       resolvedUnsParameters.handoverStateContract += `|application:${this.applicationHandoverState.contract}`;
     }
-    const unsMqttProxy = new UnsMqttProxy(mqttHost, this.processName, instanceName, resolvedUnsParameters);
+    if (this.queuedHandoverFenced) throw Error("Cannot add MQTT channels after the queued handover boundary");
+    const unsMqttProxy = new UnsMqttProxy(
+      mqttHost, this.processName, instanceName, resolvedUnsParameters, false, false,
+      Boolean(this.queuedHandoverTarget || this.queuedHandoverRecovery),
+    );
 
     // Listen for UNS proxy producing topics and publish them via MQTT.
     unsMqttProxy.event.on("unsProxyProducedTopics", (event) => {
@@ -304,6 +324,10 @@ class UnsProxyProcess {
     });
 
     this.unsMqttProxies.push(unsMqttProxy);
+    if (unsMqttProxy.hasConfiguredQueuedOutput() && !this.queuedHandover && !this.queuedHandoverTarget && !this.queuedHandoverRecovery) {
+      if (readQueuedHandoverState(process.cwd())) await unsMqttProxy.observeQueuedHandoverOutput();
+      this.registerQueuedHandover({}, true);
+    }
     return unsMqttProxy;
   }
 
@@ -329,6 +353,53 @@ class UnsProxyProcess {
     });
     await this.processMqttProxy.publish(this.serviceMetadataTopic, JSON.stringify(resolved), { retain: true });
     return resolved;
+  }
+
+  /** Register launch-correlated queue status and optional durable ingress participation. */
+  public async enableQueuedHandover(adapter: QueuedHandoverAdapter = {}): Promise<void> {
+    if (!adapter.queueIdentity && (this.queuedHandoverTarget || this.queuedHandoverRecovery || readQueuedHandoverState(process.cwd())))
+      await Promise.all(this.unsMqttProxies.map((proxy) => proxy.observeQueuedHandoverOutput()));
+    this.registerQueuedHandover(adapter, false);
+  }
+
+  private registerQueuedHandover(adapter: QueuedHandoverAdapter, automatic: boolean): void {
+    if (this.queuedHandover && !this.queuedHandoverAutoObserver) throw Error("Queued handover adapter already registered");
+    const launchId = process.env["UNS_HANDOVER_LAUNCH_ID"];
+    if (!launchId) return;
+    const qos0Inputs = this.unsMqttProxies.filter((proxy) => proxy.hasQueuedHandoverQos0Input());
+    if (adapter.inputBoundary?.kind === "mqtt-qos0-gap-v1" && !qos0Inputs.length)
+      throw Error("Queued QoS 0 handover requires an SDK-managed inlet");
+    const managedNamespace = () => {
+      const configured = this.unsMqttProxies.filter((proxy) => proxy.hasConfiguredQueuedOutput());
+      return configured.length === 1 ? configured[0]!.getQueuedHandoverManagedNamespace() : undefined;
+    };
+    this.queuedHandover?.close();
+    this.queuedHandover = new QueuedHandoverRuntime({
+      directory: process.cwd(),
+      launchId,
+      target: this.queuedHandoverTarget,
+      recovery: this.queuedHandoverRecovery,
+      adapter,
+      outputs: () => this.unsMqttProxies,
+      sourceInputActive: () => this.isActive(),
+      qos0InputReady: (subscribed) => qos0Inputs.length > 0 && qos0Inputs.every((proxy) => proxy.queuedHandoverQos0InputReady(subscribed)),
+      managedOutput: {
+        identity: () => managedNamespace()?.identity,
+        targetCapacityAvailable: () => managedNamespace()?.capacityAvailable === true,
+        assertTargetEffectsHeld: () => {
+          for (const proxy of this.unsMqttProxies) proxy.assertQueuedHandoverOutputHeld();
+        },
+      },
+      fenceLegacyHandover: (role) => {
+        if (role === "source" && !this.isActive())
+          throw Error("Queued handover source is not the active MQTT owner");
+        this.handoverManager?.suspendForQueuedHandover();
+        this.queuedHandoverFenced = true;
+      },
+      targetReleased: () => { this.active = true; },
+    });
+    this.queuedHandoverAutoObserver = automatic;
+    this.queuedHandover.listen();
   }
 
   /** Call after application input handlers and shutdown hooks are prepared. */
@@ -461,6 +532,7 @@ class UnsProxyProcess {
       process.channel?.unref();
     }
     if (this.cooperativeStopHandler) process.off("message", this.cooperativeStopHandler);
+    this.queuedHandover?.close();
     if (this.signalStopHandler) {
       process.off("SIGINT", this.signalStopHandler);
       process.off("SIGTERM", this.signalStopHandler);

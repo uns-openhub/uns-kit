@@ -5,6 +5,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
 import { openManagedOutputRoot, validateOutputRow } from "../runtime/mqtt-output-state-program.mjs";
+import { managedMqttOutputNamespaceIdentity } from "../runtime/mqtt-output-state-contract.js";
 import type { ResolvedMqttPublishQueueOptions } from "./publish-queue-contract.js";
 
 export type PublishRecord = { seq: number; id: string; topic: string; message: string; options: { qos: 1 | 2; retain: boolean }; bytes: number };
@@ -133,6 +134,17 @@ export class MqttPublishQueueStore {
         throw error;
       }
     }, 0);
+  }
+
+  managedHandoverIdentity(): string | undefined {
+    if (!this.managed || this.config.mode !== "durable" || this.finalSummary) return;
+    return managedMqttOutputNamespaceIdentity(this.managed.rootId, this.managed.relative);
+  }
+
+  canAcceptWork(): boolean {
+    const space = statfsSync(this.directory, { bigint: true });
+    return space.bavail * space.bsize >= BigInt(this.config.minFreeBytes) &&
+      this.physicalBytes() + 65_536 < this.config.maxDiskBytes;
   }
 
   put(record: PublishRecord): void {

@@ -3,7 +3,7 @@ import mqtt, { IClientOptions, MqttClient } from "mqtt";
 import logger from "../logger.js";
 import { UnsEvents } from "../uns/uns-interfaces.js";
 import { UnsEventEmitter } from "../uns/uns-event-emitter.js";
-import { IMqttParameters } from "./mqtt-interfaces.js";
+import { IMqttParameters, MqttWorkerParameters } from "./mqtt-interfaces.js";
 import { MqttWorker } from "./mqtt-worker.js";
 import { DataSizeMeasurements, PhysicalMeasurements } from "../uns/uns-measurements.js";
 
@@ -16,6 +16,14 @@ export type MqttStopOptions = {
 type MqttErrorInfo = {
   code: string | number;
   message: string;
+};
+
+type Qos0InputGate = {
+  state: "held" | "open" | "opening" | "frozen";
+  topics: Set<string>;
+  closedAt?: number;
+  suppressRetained: boolean;
+  opening?: { expected: Set<string>; messageId?: number; openedAt?: number };
 };
 
 export default class MqttProxy {
@@ -45,8 +53,10 @@ export default class MqttProxy {
   private startupSettled = false;
   private startupResolve: (() => void) | null = null;
   private startupReject: ((error: unknown) => void) | null = null;
+  private connectionGeneration = 0;
+  private qos0Input?: Qos0InputGate;
 
-  constructor(mqttHost: string, instanceName: string, mqttParameters: IMqttParameters, mqttWorker?: MqttWorker) {
+  constructor(mqttHost: string, instanceName: string, mqttParameters: MqttWorkerParameters, mqttWorker?: MqttWorker) {
     this.mqttSSL = mqttParameters?.mqttSSL ?? false;
     this.rejectUnauthorized = mqttParameters.rejectUnauthorized ?? false;
     this.mqttSubToTopics = mqttParameters?.mqttSubToTopics ?? [];
@@ -56,6 +66,13 @@ export default class MqttProxy {
     this.statusTopic = `${mqttParameters?.statusTopic}`;
     this.mqttParameters = mqttParameters ?? {};
     this.mqttWorker = mqttWorker;
+    if (mqttParameters?.queuedHandoverQos0Input) {
+      this.qos0Input = {
+        state: mqttParameters.queuedHandoverQos0Input,
+        topics: new Set([this.mqttSubToTopics].flat()),
+        suppressRetained: mqttParameters.queuedHandoverQos0Input === "held",
+      };
+    }
   }
 
   private resolveProtocol(): IMqttParameters["protocol"] {
@@ -106,6 +123,11 @@ export default class MqttProxy {
   }
 
   private subscribeToTopics(): void {
+    if (this.qos0Input) {
+      if (this.qos0Input.state === "open" && this.qos0Input.topics.size)
+        void this.subscribeAsync([...this.qos0Input.topics]).catch(() => logger.warn("Queued QoS 0 input subscription is unconfirmed"));
+      return;
+    }
     if (this.mqttSubToTopics && this.mqttSubToTopics.length > 0) {
       logger.debug(`${this.instanceName} - Subscribed to ${this.mqttSubToTopics.length} topics.`);
       this.mqttClient.subscribe(this.mqttSubToTopics, { qos: 0 });
@@ -114,11 +136,73 @@ export default class MqttProxy {
 
   /** Stop broker admission before draining already received application input. */
   public async pauseSubscriptions(): Promise<void> {
+    if (this.qos0Input) {
+      await this.closeQueuedHandoverQos0Input();
+      return;
+    }
     const topics = [this.mqttSubToTopics].flat();
     if (!topics.length) return;
     await new Promise<void>((resolve, reject) => {
       this.mqttClient.unsubscribe(topics, error => error ? reject(error) : resolve());
     });
+  }
+
+  public permitsOrdinaryInputActivation(): boolean {
+    return !this.qos0Input || this.qos0Input.state === "open";
+  }
+
+  private async awaitQos0BrokerAck<T>(work: Promise<T>): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([work, new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(Error("Queued QoS 0 broker acknowledgement timed out")), 5000);
+      })]);
+    } finally { clearTimeout(timer); }
+  }
+
+  public async closeQueuedHandoverQos0Input(): Promise<{ closedAt: number }> {
+    const gate = this.qos0Input;
+    if (!gate) throw Error("Queued QoS 0 inlet is unavailable");
+    if (gate.state === "frozen" && gate.closedAt !== undefined) return { closedAt: gate.closedAt };
+    if (gate.state !== "open" && gate.state !== "held") throw Error("Queued QoS 0 input closure is unconfirmed");
+    const wasHeld = gate.state === "held";
+    const client = this.mqttClient;
+    const generation = this.connectionGeneration;
+    const topics = [...gate.topics];
+    if (!wasHeld && (!client?.connected || !topics.length || !this.subscriptionReadiness.ready()))
+      throw Error("Queued QoS 0 input has no confirmed live subscription");
+    gate.state = "frozen";
+    const closedAt = Date.now();
+    if (!wasHeld) {
+      const ack = await this.awaitQos0BrokerAck(client.unsubscribeAsync(topics));
+      if (client !== this.mqttClient || !client.connected || generation !== this.connectionGeneration ||
+          ack?.cmd !== "unsuback" || ack.granted.length !== topics.length || ack.granted.some((reason) => reason !== 0 && reason !== 17))
+        throw Error("Queued QoS 0 unsubscribe was not confirmed");
+    }
+    gate.closedAt = closedAt;
+    return { closedAt };
+  }
+
+  public async openQueuedHandoverQos0Input(): Promise<{ openedAt: number }> {
+    const gate = this.qos0Input;
+    const client = this.mqttClient;
+    const generation = this.connectionGeneration;
+    if (!gate || gate.state !== "held" || !client?.connected || !gate.topics.size)
+      throw Error("Queued QoS 0 input requires a held connected target with reviewed subscriptions");
+    const opening: NonNullable<Qos0InputGate["opening"]> = { expected: new Set(gate.topics) };
+    gate.opening = opening;
+    gate.state = "opening";
+    try {
+      const grants = await this.awaitQos0BrokerAck(client.subscribeAsync([...opening.expected], { qos: 0, rh: 2 }));
+      if (client !== this.mqttClient || !client.connected || generation !== this.connectionGeneration ||
+          opening.openedAt === undefined || grants.length !== opening.expected.size ||
+          grants.some(({ topic, qos }) => !opening.expected.has(topic) || qos !== 0))
+        throw Error("Queued QoS 0 subscriptions were not confirmed");
+      return { openedAt: opening.openedAt };
+    } catch (error) {
+      gate.state = "frozen";
+      throw error;
+    } finally { gate.opening = undefined; }
   }
 
   private buildServers(defaultProtocol: IMqttParameters["protocol"]): IClientOptions["servers"] | undefined {
@@ -220,15 +304,28 @@ export default class MqttProxy {
 
         this.mqttClient.on("connect", onConnect);
         this.mqttClient.on("packetsend", packet => {
+          const opening = this.qos0Input?.opening;
+          if (opening && packet.cmd === "subscribe" && packet.subscriptions.length === opening.expected.size &&
+            packet.subscriptions.every(({ topic, qos }) => opening.expected.has(topic) && qos === 0))
+            opening.messageId = packet.messageId;
           this.subscriptionReadiness.sent(packet as Parameters<SubscriptionReadiness["sent"]>[0]);
           this.emitSubscriptionReadiness();
         });
         this.mqttClient.on("packetreceive", packet => {
+          const gate = this.qos0Input;
+          const opening = gate?.opening;
+          if (gate?.state === "opening" && opening?.messageId !== undefined && packet.cmd === "suback" &&
+              packet.messageId === opening.messageId && packet.granted.length === opening.expected.size && packet.granted.every((qos) => qos === 0)) {
+            // This event precedes MQTT.js promise resolution and subsequent message dispatch.
+            gate.state = "open";
+            opening.openedAt = Date.now();
+          }
           this.subscriptionReadiness.received(packet as Parameters<SubscriptionReadiness["received"]>[0]);
           this.emitSubscriptionReadiness();
         });
 
         this.mqttClient.on("message", (topic: string, message: Buffer, packet: mqtt.IPublishPacket) => {
+          if (this.qos0Input && (this.qos0Input.state !== "open" || packet.qos !== 0 || (this.qos0Input.suppressRetained && packet.retain))) return;
           try {
             logger.debug(`${this.instanceName} - Message received on topic ${topic}`);
             this.event.emit("input", {
@@ -348,7 +445,15 @@ export default class MqttProxy {
   }
 
   public async subscribeAsync(topic: string | string[], options?: mqtt.IClientSubscribeOptions): Promise<mqtt.ISubscriptionGrant[]> {
-    return this.mqttClient.subscribeAsync(topic, options);
+    const gate = this.qos0Input;
+    if (!gate) return this.mqttClient.subscribeAsync(topic, options);
+    if (gate.state === "frozen" || gate.opening) throw Error("Queued QoS 0 subscription changes are fenced");
+    if (options && options.qos !== 0) throw Error("Queued handover input uses QoS 0 only");
+    const topics = [topic].flat();
+    for (const name of topics) gate.topics.add(name);
+    return gate.state === "open" && this.mqttClient?.connected
+      ? await this.mqttClient.subscribeAsync(topics, { ...options, qos: 0, ...(gate.suppressRetained ? { rh: 2 } : {}) })
+      : [];
   }
 
   public async unsubscribeAsync(topic: string | string[]): Promise<mqtt.Packet | undefined> {
@@ -356,6 +461,19 @@ export default class MqttProxy {
     if (topics.length === 0) {
       logger.warn(`${this.instanceName} - unsubscribeAsync called with empty topic list; skipping.`);
       return Promise.resolve(undefined);
+    }
+    const gate = this.qos0Input;
+    if (gate) {
+      if (gate.state === "frozen" || gate.opening) throw Error("Queued QoS 0 subscription changes are fenced");
+      if (gate.state === "open" && this.mqttClient?.connected) {
+        const ack = await this.mqttClient.unsubscribeAsync(topics);
+        if (ack?.cmd !== "unsuback" || ack.granted.length !== topics.length || ack.granted.some((reason) => reason !== 0 && reason !== 17))
+          throw Error("Queued QoS 0 unsubscribe was not confirmed");
+        for (const name of topics) gate.topics.delete(name);
+        return ack;
+      }
+      for (const name of topics) gate.topics.delete(name);
+      return;
     }
     return this.mqttClient.unsubscribeAsync(topics);
   }
@@ -425,6 +543,7 @@ export default class MqttProxy {
       this.startupSettled = true;
       this.hasEstablishedConnection = true;
       this.isConnected = true;
+      this.connectionGeneration++;
       this.subscriptionReadiness.connection(true);
       this.emitSubscriptionReadiness();
 

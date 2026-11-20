@@ -63,6 +63,7 @@ export class HandoverManager {
     shutdownHooks?: HandoverShutdownHooks,
     private readonly statefulHandover = false,
     private readonly applicationState?: ApplicationHandoverState,
+    private queuedHandoverSuspended = false,
   ) {
     validateHandoverShutdown(shutdownHooks);
     this.shutdownHooks = shutdownHooks ? { ...shutdownHooks } : undefined;
@@ -84,7 +85,7 @@ export class HandoverManager {
 
     // Set status as active after a timeout if no other active process are detected.
     this.activeTimeout = setTimeout(async () => {
-      if (this.statefulHandover && this.handoverId) return; // A reviewed successor never self-promotes.
+      if (this.queuedHandoverSuspended || (this.statefulHandover && this.handoverId)) return;
       logger.info(`${this.processName} - No active message received within timeout. Assuming no other process is running.`);
       for (const proxy of this.unsMqttProxies) proxy.setPublisherActive();
       try { await this.activateApplication(); }
@@ -104,6 +105,14 @@ export class HandoverManager {
     const normalized = normalizeHandoverId(handoverId ?? this.handoverId);
     if (normalized) properties.handoverId = normalized;
     return properties;
+  }
+
+  public suspendForQueuedHandover(): void {
+    if (this.sourceReviewInFlight || this.handoverInProgress || this.requestingHandover)
+      throw Error("A correlated MQTT handover already owns the process");
+    this.queuedHandoverSuspended = true;
+    clearTimeout(this.activeTimeout);
+    this.activeTimeout = undefined;
   }
 
   private handoverPayload(
@@ -175,6 +184,7 @@ export class HandoverManager {
    * It checks the topic and delegates to the corresponding handler.
    */
   public async handleMqttMessage(event: UnsEvents["input"]): Promise<void> {
+    if (this.queuedHandoverSuspended) return;
     try {
       // Check if the packet is active messages from other processes and this process is not active.
       if (this.isProcessActiveTopic(event.topic) && this.requestingHandover === false && this.active === false && this.handoverInProgress === false) {

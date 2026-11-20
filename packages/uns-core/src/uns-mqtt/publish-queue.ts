@@ -102,6 +102,13 @@ export class MqttPublishQueue {
   getState(): boolean {
     return this.active;
   }
+  handoverNamespace(): { identity: string | undefined; capacityAvailable: boolean } {
+    const identity = this.store.managedHandoverIdentity();
+    if (!identity || this.blocked || this.closed) return { identity, capacityAvailable: false };
+    const status = this.snapshot();
+    return { identity, capacityAvailable: status.pendingRecords < this.config.maxRecords &&
+      status.pendingBytes < this.config.maxBytes && this.store.canAcceptWork() };
+  }
   becomeActive(snapshot?: { batchSize?: number; referenceHash?: string }): void {
     if (snapshot?.batchSize) throw Error("Persistent MQTT output cannot discard work using legacy handover hashes");
     this.active = true;
