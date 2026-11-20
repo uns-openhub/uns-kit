@@ -104,11 +104,11 @@ class UnsProxy:
             "unsProxyProducedApiEndpoints",
             {
                 "producedApiEndpoints": list(self._produced_api_endpoints.values()),
-                "statusTopic": f"{self._instance_status_topic}api",
+                "statusTopic": f"{self._instance_status_topic}api-endpoints",
             },
         )
         payload = json.dumps(list(self._produced_api_endpoints.values()), separators=(",", ":"))
-        await self._client.publish_raw(f"{self._instance_status_topic}api", payload, retain=True)
+        await self._client.publish_raw(f"{self._instance_status_topic}api-endpoints", payload, retain=True)
 
     async def _emit_produced_service_endpoints(self) -> None:
         await self.event.emit(

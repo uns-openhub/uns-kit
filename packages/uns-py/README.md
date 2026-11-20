@@ -6,6 +6,13 @@ Python UNS SDK for runtime services, API/service exposure, and Datahub access. P
 - Process + instance status topics (active/heap/uptime/alive + stats).
 - Minimal UNS packet builder/parser (data/table) aligned with TS core.
 
+## Controller API registry correction (0.2.11)
+
+Default API metadata now uses the retained `/api-endpoints` registry topic,
+matching Controller and TypeScript. This fixes missing discovery and proxy routes
+caused by the earlier `/api` suffix. Handler URLs and authorization are unchanged.
+The declared parent UNS topic must exist for tree-backed endpoint registration.
+
 ## Durable input and same-host hot handover (0.2.10)
 
 Opt-in `DurableInputJournal`, independent `DurableMqttReceiver` and `JournalInput`
