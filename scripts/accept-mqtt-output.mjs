@@ -1,6 +1,6 @@
-/** Local-only built-artifact rehearsal. Requires a loopback mosquitto binary. */
+/** Local-only built-artifact rehearsal. Requires Mosquitto 2.x. */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -14,8 +14,12 @@ const requireCore = createRequire(path.join(repo, "packages/uns-core/package.jso
 const mqtt = requireCore("mqtt");
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
 const { default: UnsMqttProxy } = await import(pathToFileURL(path.join(repo, "packages/uns-core/dist/uns-mqtt/uns-mqtt-proxy.js")));
-const root = await mkdtemp(path.join(tmpdir(), "uns-mqtt-output-acceptance-"));
 const binary = process.env.UNS_MQTT_TEST_BROKER ?? "mosquitto";
+const help = spawnSync(binary, ["-h"], { encoding: "utf8", timeout: 5000, maxBuffer: 16384 });
+if (help.error) throw Error("Unable to check the local Mosquitto version", { cause: help.error });
+if (!/^mosquitto version 2\./m.test(help.stdout + "\n" + help.stderr))
+  throw Error("Local acceptance requires Mosquitto 2.x for loopback-only listeners");
+const root = await mkdtemp(path.join(tmpdir(), "uns-mqtt-output-acceptance-"));
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(check, timeout = 15000) {
   const end = Date.now() + timeout;
@@ -35,8 +39,6 @@ async function port() {
   return p;
 }
 const brokerPort = await port();
-const brokerConfig = path.join(root, "mosquitto.conf");
-await writeFile(brokerConfig, `listener ${brokerPort} 127.0.0.1\nallow_anonymous true\npersistence false\n`);
 let broker;
 const children = new Set();
 const proxies = new Set();
@@ -46,27 +48,38 @@ let observer;
 const events = [];
 const results = { schemaVersion: 1, root, broker: binary, production: false, tests: [] };
 async function startBroker() {
-  broker = spawn(binary, ["-c", brokerConfig], { stdio: ["ignore", "ignore", "pipe"] });
+  // With no config file, Mosquitto 2.x binds -p only to loopback.
+  const child = spawn(binary, ["-p", String(brokerPort)], { stdio: ["ignore", "ignore", "pipe"] });
+  broker = child;
   let error;
-  broker.on("error", (e) => {
+  let stderr = "";
+  child.on("error", (e) => {
     error = e;
   });
-  broker.stderr.on("data", () => {});
-  await until(async () => {
-    if (error) throw error;
-    return new Promise((resolve) => {
-      const s = net.connect(brokerPort, "127.0.0.1");
-      s.on("connect", () => {
-        s.destroy();
-        resolve(true);
-      });
-      s.on("error", () => resolve(false));
-    });
+  child.stderr.on("data", (chunk) => {
+    stderr = (stderr + chunk).slice(-4096);
   });
+  try {
+    await until(async () => {
+      if (error) throw error;
+      if (child.exitCode !== null || child.signalCode !== null)
+        throw Error(`Mosquitto exited (${child.signalCode ?? child.exitCode})`);
+      return new Promise((resolve) => {
+        const s = net.connect(brokerPort, "127.0.0.1");
+        s.on("connect", () => {
+          s.destroy();
+          resolve(true);
+        });
+        s.on("error", () => resolve(false));
+      });
+    });
+  } catch (cause) {
+    throw Error(`Local Mosquitto startup failed: ${cause.message}${stderr ? "\n" + stderr.trim() : ""}`, { cause });
+  }
 }
 async function stopBroker() {
   const p = broker;
-  if (!p?.pid || p.exitCode !== null) return;
+  if (!p?.pid || p.exitCode !== null || p.signalCode !== null) return;
   const ended = once(p, "exit");
   p.kill("SIGTERM");
   await ended;
