@@ -520,6 +520,11 @@ export class ThrottledSubscriber extends ThrottledQueue<SubscriberQueueItem> {
     await this.becomePassive(3, true);
   }
 
+  public async drainQueuedHandoverQos0Input(): Promise<void> {
+    await this.drainOwnedInput();
+    if (this.queue.length || this.inFlight) throw Error("Accepted MQTT input still requires confirmation");
+  }
+
   /**
    * Switch the subscriber to an active state and resume processing.
    */

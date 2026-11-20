@@ -142,6 +142,8 @@ export interface IUnsParameters {
   publishBackpressure?: { maxWaiting?: number };
   /** Keep one input owned by the worker until setInputHandler's async work finishes. */
   managedInput?: boolean;
+  /** Explicit clean-session worker inlet for reviewed QoS 0 gap handover. */
+  queuedHandoverQos0Input?: true;
   subscribeThrottlingDelay?: number; // Delay in milliseconds; default is 1ms
   rejectUnauthorized?: boolean;
   clientId?: string;

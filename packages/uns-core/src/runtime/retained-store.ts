@@ -3,9 +3,32 @@ import * as fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 
-import { available, maintenanceLease, runtimeLease } from "./retained-store-storage.mjs";
+import { available, FRESH, maintenanceLease, owned, rootLease, runtimeLease } from "./retained-store-storage.mjs";
 import { inspectRetainedCopy, applyRetainedCopy, type RetainedCopyFingerprint } from "./retained-store-copy.mjs";
 import { retainedStoreJob } from "./retained-store-job.mjs";
+import {
+  parseRetainedStoreConfigurationManifest,
+  RETAINED_STORE_CONFIGURATION_MANIFEST,
+  RETAINED_STORE_CONFIGURATION_MANIFEST_MAX_BYTES,
+  type RetainedStoreConfigurationManifest,
+} from "./retained-store-configuration.js";
+
+export {
+  RETAINED_STORE_CONFIGURATION_MANIFEST,
+  retainedStoreConfigurationManifestSchema,
+  reviewRetainedStoreConfigurationChange,
+  type RetainedStoreConfigurationManifest,
+} from "./retained-store-configuration.js";
+
+import {
+  assertRetainedStorePath, readRetainedStoreJson, retainedStoreDigest, retainedStoreEntry,
+  syncRetainedDirectory, writeRetainedStoreJson,
+} from "./retained-store-files.js";
+export {
+  assertRetainedStorePath, readRetainedStoreJson, retainedStoreDigest, retainedStoreEntry,
+  syncRetainedDirectory, writeRetainedStoreJson,
+} from "./retained-store-files.js";
+
 const copyLimits = () => JSON.parse(fs.readFileSync(new URL("./retained-store-storage-contract.json", import.meta.url), "utf8"));
 
 const segment = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
@@ -42,7 +65,7 @@ export const retainedStoreManifestSchema = z
   .superRefine((m, ctx) => {
     if (new Set(m.resources.map((r) => r.id)).size !== m.resources.length) ctx.addIssue({ code: "custom", message: "Duplicate resource ID" });
     for (const r of m.resources) {
-      if (["store.json", "store-resources.json", "store-operation.json", "store-lease.sqlite", "store-returned.json"].includes(r.id))
+      if (["store.json", "store-resources.json", "store-operation.json", "store-lease.sqlite", "store-returned.json", FRESH].includes(r.id))
         ctx.addIssue({ code: "custom", message: "Reserved store metadata resource" });
       if (["config.json", "controller-state.json", RETAINED_STORE_BINDING, RETAINED_STORE_GUARD].includes(r.path))
         ctx.addIssue({ code: "custom", message: "Reserved instance resource" });
@@ -89,74 +112,30 @@ const bindingSchema = z
     maintenance: z.literal(true),
   })
   .strict();
-export function retainedStoreDigest(value: unknown): string {
-  const stable = (v: any): any =>
-    Array.isArray(v)
-      ? v.map(stable)
-      : v && typeof v === "object"
-        ? Object.fromEntries(
-            Object.keys(v)
-              .sort()
-              .map((k) => [k, stable(v[k])]),
-          )
-        : v;
-  return createHash("sha256")
-    .update(JSON.stringify(stable(value)))
-    .digest("hex");
-}
-export function retainedStoreEntry(file: string): fs.Stats | undefined {
-  try {
-    return fs.lstatSync(file);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
-    throw e;
-  }
-}
-export function assertRetainedStorePath(file: string): void {
-  if (!path.isAbsolute(file) || path.normalize(file) !== file) throw Error("Unnormalized retained store path");
-  for (let p = file; p !== path.dirname(p); p = path.dirname(p)) {
-    const s = retainedStoreEntry(p);
-    if (s?.isSymbolicLink()) throw Error("Linked retained store path");
-  }
-}
-export function readRetainedStoreJson(file: string): unknown {
+export function readRetainedStoreConfigurationManifest(packageDirectory: string): { manifest: RetainedStoreConfigurationManifest; digest: string } {
+  assertRetainedStorePath(packageDirectory);
+  const file = path.join(packageDirectory, RETAINED_STORE_CONFIGURATION_MANIFEST);
   assertRetainedStorePath(file);
-  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
   try {
-    const s = fs.fstatSync(fd);
-    if (!s.isFile() || s.nlink !== 1 || s.size > 128 * 1024 || s.uid !== process.getuid?.()) throw Error("Unsafe retained store metadata");
-    return JSON.parse(fs.readFileSync(fd, "utf8"));
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-export function syncRetainedDirectory(directory: string): void {
-  const fd = fs.openSync(directory, "r");
-  try {
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-export function writeRetainedStoreJson(file: string, value: unknown): void {
-  assertRetainedStorePath(file);
-  const temporary = file + "." + randomUUID() + ".tmp";
-  const text = JSON.stringify(value);
-  if (Buffer.byteLength(text) > 128 * 1024) throw Error("Retained store metadata too large");
-  try {
-    const fd = fs.openSync(temporary, "wx", 0o600);
-    try {
-      fs.writeFileSync(fd, text);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
+    const stat = fs.fstatSync(fd);
+    const maximumBytes = RETAINED_STORE_CONFIGURATION_MANIFEST_MAX_BYTES;
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > maximumBytes || stat.uid !== process.getuid?.())
+      throw Error("Unsafe retained store configuration declaration");
+    const buffer = Buffer.alloc(maximumBytes + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      const count = fs.readSync(fd, buffer, size, buffer.length - size, null);
+      if (count === 0) break;
+      size += count;
     }
-    fs.renameSync(temporary, file);
-    syncRetainedDirectory(path.dirname(file));
+    const bytes = buffer.subarray(0, size);
+    return { manifest: parseRetainedStoreConfigurationManifest(bytes), digest: createHash("sha256").update(bytes).digest("hex") };
   } finally {
-    if (retainedStoreEntry(temporary)) fs.unlinkSync(temporary);
+    fs.closeSync(fd);
   }
 }
+
 export function readRetainedStoreManifest(packageDirectory: string): RetainedStoreManifest {
   return retainedStoreManifestSchema.parse(readRetainedStoreJson(path.join(packageDirectory, RETAINED_STORE_MANIFEST)));
 }
@@ -282,6 +261,183 @@ export function writeRetainedStoreBinding(instanceDirectory: string, binding: St
   bindingSchema.parse(binding);
   writeRetainedStoreJson(path.join(instanceDirectory, RETAINED_STORE_BINDING), binding);
 }
+
+const freshReceiptSchema = z.strictObject({
+  protocol: z.literal(1),
+  kind: z.literal("prepared-empty"),
+  storeId: z.uuid(),
+  generation: z.uuid(),
+  operationId: z.uuid(),
+  bindingDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  manifestDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  instanceDigest: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+function freshReceipt(binding: StoreBinding, manifest: RetainedStoreManifest, instanceDigest: string) {
+  return freshReceiptSchema.parse({
+    protocol: 1,
+    kind: "prepared-empty",
+    storeId: binding.storeId,
+    generation: binding.generation,
+    operationId: binding.operationId,
+    bindingDigest: retainedStoreDigest(binding),
+    manifestDigest: retainedStoreDigest(manifest),
+    instanceDigest,
+  });
+}
+
+export function canPrepareEmptyRetainedStore(manifest: unknown): boolean {
+  const parsed = retainedStoreManifestSchema.safeParse(manifest);
+  return parsed.success && parsed.data.storageProtocol === 1 &&
+    !parsed.data.resources.some(({ kind, required }) => kind === "file" && required);
+}
+
+/** Verify origin under an open Runtime lease. An originated store can already contain work. */
+export function isFreshRetainedStore(binding: StoreBinding, manifest: RetainedStoreManifest): boolean {
+  const file = path.join(bindingSchema.parse(binding).directory, FRESH);
+  if (!retainedStoreEntry(file)) return false;
+  if (owned(file).mode & 0o077) throw Error("Fresh retained store receipt must be private");
+  const receipt = freshReceiptSchema.parse(readRetainedStoreJson(file));
+  return retainedStoreDigest(receipt) === retainedStoreDigest(freshReceipt(binding, retainedStoreManifestSchema.parse(manifest), receipt.instanceDigest));
+}
+
+/** A reviewed instance preparation may resume the exact prefix after a process crash. */
+function writePreparedBinding(file: string, binding: StoreBinding): void {
+  const directory = path.dirname(file);
+  const temporary = path.join(directory, `.${RETAINED_STORE_BINDING}.empty-retained-preparation`);
+  const expected = Buffer.from(JSON.stringify(binding));
+  const fd = fs.openSync(temporary, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK, 0o600);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.uid !== process.getuid?.() || stat.mode & 0o077 || stat.size > expected.length)
+      throw Error("Unsafe prepared binding staging file");
+    if (!fs.readFileSync(fd).equals(expected.subarray(0, stat.size))) throw Error("Prepared binding staging differs from intent");
+    fs.writeFileSync(fd, expected.subarray(stat.size));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (retainedStoreEntry(file)) throw Error("Draft binding appeared during preparation");
+  fs.renameSync(temporary, file);
+  syncRetainedDirectory(directory);
+}
+
+/** Provision an explicitly reviewed empty store. Caller holds the stopped draft's instance mutation lock. */
+export function prepareEmptyRetainedStore(input: {
+  instanceDirectory: string;
+  retainedRoot: string;
+  binding: StoreBinding;
+  manifest: RetainedStoreManifest;
+}): void {
+  const { instanceDirectory, retainedRoot } = input;
+  const binding = bindingSchema.parse(input.binding);
+  const manifest = retainedStoreManifestSchema.parse(input.manifest);
+  const { directory } = binding;
+  if (!canPrepareEmptyRetainedStore(manifest) || binding.format !== manifest.format)
+    throw Error("Retained declaration cannot initialize empty resources");
+  if (directory !== path.join(retainedRoot, binding.storeId) ||
+      instanceDirectory === retainedRoot || instanceDirectory.startsWith(retainedRoot + path.sep) || retainedRoot.startsWith(instanceDirectory + path.sep))
+    throw Error("Empty retained store requires the exact Runtime root and independent draft directory");
+  const runtimeRoot = process.env["UNS_RETAINED_STORE_ROOT"]?.trim();
+  if (runtimeRoot && runtimeRoot !== retainedRoot) throw Error("Empty retained store does not match the configured Runtime root");
+  const instance = owned(instanceDirectory, true);
+  const bindingFile = path.join(instanceDirectory, RETAINED_STORE_BINDING);
+  const hasBinding = () => {
+    if (!retainedStoreEntry(bindingFile)) return false;
+    if (owned(bindingFile).mode & 0o077 || retainedStoreDigest(bindingSchema.parse(readRetainedStoreJson(bindingFile))) !== retainedStoreDigest(binding))
+      throw Error("Draft has a different retained store binding");
+    return true;
+  };
+  const legacy = manifest.resources.map((resource) => path.join(instanceDirectory, resource.path));
+  legacy.forEach(assertRetainedStorePath);
+  if (retainedStoreEntry(path.join(instanceDirectory, RETAINED_STORE_GUARD)) || legacy.some(retainedStoreEntry))
+    throw Error("Draft already has retained resource data or an active storage guard");
+
+  const receipt = freshReceipt(binding, manifest, retainedStoreDigest({ instanceDirectory, device: instance.dev, inode: instance.ino }));
+  const prefix = `retained-prepare-${binding.storeId}-`;
+  const intent = retainedStoreDigest(receipt);
+  const stage = path.join(retainedRoot, prefix + intent);
+  const metadata = new Map<string, unknown>([["store.json", binding], ["store-resources.json", manifest], [FRESH, receipt]]);
+  const assertMatchingMetadata = (file: string, expected: unknown) => {
+    if (owned(file).mode & 0o077 || retainedStoreDigest(readRetainedStoreJson(file)) !== retainedStoreDigest(expected))
+      throw Error("Existing retained store evidence differs from preparation");
+  };
+  const resources = manifest.resources.filter(({ required }) => required).map(({ id }) => id);
+  const allowed = new Set(["store-lease.sqlite", ...metadata.keys(), ...resources]);
+  const releaseRoot = rootLease(retainedRoot);
+  try {
+    const root = owned(retainedRoot, true);
+    const published = !!retainedStoreEntry(directory);
+    if (hasBinding() && !published) throw Error("Draft already names an unavailable retained store");
+    for (const name of fs.readdirSync(retainedRoot))
+      if (name.startsWith(prefix) && (published || name !== path.basename(stage)))
+        throw Error("A different retained preparation already owns this store");
+    if (!published && !retainedStoreEntry(stage)) {
+      fs.mkdirSync(stage, { mode: 0o700 });
+      syncRetainedDirectory(retainedRoot);
+    }
+    const work = published ? directory : stage;
+    const workStat = owned(work, true);
+    if (workStat.mode & 0o077 || workStat.dev !== root.dev) throw Error("Unsafe empty retained store location");
+    if (published) {
+      if (!retainedStoreEntry(path.join(work, FRESH))) throw Error("Existing store is not this empty retained preparation");
+      assertMatchingMetadata(path.join(work, FRESH), receipt);
+    }
+    const releaseStore = maintenanceLease(work);
+    try {
+      const temporaryFiles: string[] = [];
+      for (const name of fs.readdirSync(work)) {
+        if (allowed.has(name)) continue;
+        const temporary = !published && [...metadata.keys()].some((key) => name.startsWith(key + ".") &&
+          name.endsWith(".tmp") && z.uuid().safeParse(name.slice(key.length + 1, -4)).success);
+        if (!temporary) throw Error("Retained store has unexpected entries; preserve for review");
+        const file = path.join(work, name);
+        if (owned(file).mode & 0o077) throw Error("Unsafe staged retained metadata");
+        temporaryFiles.push(file);
+      }
+      const missingMetadata = new Map<string, unknown>();
+      for (const [name, expected] of metadata) {
+        const file = path.join(work, name);
+        if (!retainedStoreEntry(file)) {
+          if (published) throw Error("Existing store is not this empty retained preparation");
+          missingMetadata.set(file, expected);
+        } else assertMatchingMetadata(file, expected);
+      }
+      const missingDirectories: string[] = [];
+      for (const id of resources) {
+        const file = path.join(work, id);
+        if (!published && !retainedStoreEntry(file)) {
+          missingDirectories.push(file);
+          continue;
+        }
+        const current = owned(file, true);
+        if (current.mode & 0o077 || current.dev !== root.dev || fs.readdirSync(file).length)
+          throw Error("Retained store is not empty; preserve existing work");
+      }
+      if (!published) {
+        for (const file of temporaryFiles) fs.unlinkSync(file);
+        for (const [file, expected] of missingMetadata) writeRetainedStoreJson(file, expected);
+        for (const file of missingDirectories) {
+          fs.mkdirSync(file, { mode: 0o700 });
+          syncRetainedDirectory(file);
+        }
+        if (retainedStoreEntry(directory) || fs.readdirSync(retainedRoot).some((name) => name.startsWith(prefix) && name !== path.basename(stage)))
+          throw Error("Retained store destination changed");
+        syncRetainedDirectory(stage);
+        fs.renameSync(stage, directory);
+        syncRetainedDirectory(retainedRoot);
+      }
+      const currentInstance = owned(instanceDirectory, true);
+      if (currentInstance.dev !== instance.dev || currentInstance.ino !== instance.ino) throw Error("Retained draft identity changed");
+      if (!hasBinding()) writePreparedBinding(bindingFile, binding);
+    } finally {
+      releaseStore();
+    }
+  } finally {
+    releaseRoot();
+  }
+}
+
 export function loadRetainedStoreBinding(instanceDirectory: string, operationId?: string): StoreBinding | undefined {
   const file = path.join(instanceDirectory, RETAINED_STORE_BINDING);
   if (!retainedStoreEntry(file)) return;

@@ -9,6 +9,16 @@ Agents must inspect the application's existing ownership and shutdown flow
 before editing it. The examples below describe the intended behavior, not a
 mechanical search-and-replace operation.
 
+## 3.0.56 - Reviewed retained configuration and queued handover
+
+Services adopting queued handover need matching SDK runtimes on both launch
+roles and a Controller that supports the declared input boundary. MQTT QoS 0
+handover requires the managed MQTT input gate and explicit acceptance of the
+subscription gap. Runtime backup tooling must include the matching retained
+storage program before protecting newly prepared empty stores. Existing service
+configuration and standalone lifecycle continue to work as before. See the
+[retained store adoption guide](https://github.com/uns-openhub/uns-kit/blob/master/docs/retained-store-adoption.md#queued-handover).
+
 ## 3.0.54 - Separate configured UNS and service API access
 
 When crossing `<3.0.54` to `>=3.0.54`, ordinary authenticated `UnsApiProxy`

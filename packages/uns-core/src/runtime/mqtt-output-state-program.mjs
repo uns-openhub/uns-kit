@@ -187,31 +187,49 @@ export function openManagedOutputRoot(directory, root) {
     throw e;
   }
 }
-/** Read-only reviewed handoff evidence. Never initializes, deletes or rebinds a queue. */
-export function inspectManagedOutputQueue(root, directory, identity, limits, requireStopped = true) {
-  outputStateLimits(limits);
+function beginOutputInspection(root, directory) {
   assertOutputStateRoot(root);
   const relative = outputStateRelative(root, directory);
   noLinks(directory);
-  const { DatabaseSync } = sqlite();
+  for (let current = directory; current !== root; current = path.dirname(current)) check(current, true, true);
   const file = path.join(root, guardName);
   check(file);
   check(file + "-journal", false, true);
-  const guard = new DatabaseSync(file, { readOnly: true });
-  let owner;
+  const { DatabaseSync } = sqlite();
+  const database = new DatabaseSync(file, { readOnly: true });
   try {
-    guard.exec("PRAGMA busy_timeout=1000; BEGIN");
-    const meta = Object.fromEntries(guard.prepare("SELECT key,value FROM metadata").all().map(r => [r.key,r.value]));
-    if (!exactKeys(meta, ["schema", "id"]) || meta.schema !== "mqtt-output-root-1" || !uuid.test(meta.id)) fail();
+    database.exec("PRAGMA busy_timeout=1000; BEGIN");
+    if (database.prepare("PRAGMA journal_mode").get().journal_mode !== "delete") fail();
+    const metadata = Object.fromEntries(database.prepare("SELECT key,value FROM metadata").all().map(row => [row.key, row.value]));
+    if (!exactKeys(metadata, ["schema", "id"]) || metadata.schema !== "mqtt-output-root-1" || !uuid.test(metadata.id)) fail();
+    if (fs.existsSync(path.join(root, stageName))) fail();
     const marker = path.join(root, markerName);
     if (fs.existsSync(marker)) {
-      const m = privateJson(marker);
-      if (!exactKeys(m,["schemaVersion","state","sourceSha","rootId"]) || m.schemaVersion !== 1 ||
-          m.state !== "complete" || !hex.test(m.sourceSha) || m.rootId !== meta.id) fail();
+      const restore = privateJson(marker);
+      if (!exactKeys(restore, ["schemaVersion", "state", "sourceSha", "rootId"]) || restore.schemaVersion !== 1 ||
+          restore.state !== "complete" || !hex.test(restore.sourceSha) || restore.rootId !== metadata.id) fail();
     }
-    if (fs.existsSync(path.join(root, stageName))) fail();
-    check(path.dirname(directory), true, true);
-    const base = {rootId: meta.id, relative, identity};
+    return { rootId: metadata.id, relative, close: () => database.close() };
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+/** Queue namespace metadata without creating the guard or opening any outbox database. */
+export function inspectManagedOutputNamespace(root, directory) {
+  const { rootId, relative, close } = beginOutputInspection(root, directory);
+  close();
+  return { rootId, relative };
+}
+/** Read-only reviewed handoff evidence. Never initializes, deletes or rebinds a queue. */
+export function inspectManagedOutputQueue(root, directory, identity, limits, requireStopped = true) {
+  outputStateLimits(limits);
+  const guard = beginOutputInspection(root, directory);
+  const { rootId, relative } = guard;
+  const { DatabaseSync } = sqlite();
+  let owner;
+  try {
+    const base = {rootId, relative, identity};
     if (!check(directory, true, true)) return {...base, records:0, bytes:0, exists:false, ownerActive:false};
     const entries = fs.opendirSync(directory);
     const names = [];
@@ -231,7 +249,7 @@ export function inspectManagedOutputQueue(root, directory, identity, limits, req
 
     const dbFile = path.join(directory,"mqtt-outbox.sqlite");
     if (check(dbFile).size > limits.maximumSnapshotBytes) fail();
-    const status = inspectDatabase(dbFile,{rootId:meta.id,relative},limits);
+    const status = inspectDatabase(dbFile,{rootId,relative},limits);
     if (status.identity !== identity) fail();
     return {...base, records:status.records, bytes:status.bytes, exists:true, ownerActive};
   } finally { owner?.close(); guard.close(); }

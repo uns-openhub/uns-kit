@@ -24,6 +24,7 @@ export function runOutputStateProgram(args: string[]): Promise<unknown>;
 export function validateOutputSnapshot(directory: string, limits: unknown): { queues: unknown[]; rootId: string };
 
 export function outputStateRelative(root: string, directory: string): string;
+export function inspectManagedOutputNamespace(root: string, directory: string): { rootId: string; relative: string };
 
 export function outputStateMain(args?: string[]): Promise<void>;
 

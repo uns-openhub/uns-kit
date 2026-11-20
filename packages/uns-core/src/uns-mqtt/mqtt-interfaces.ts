@@ -54,6 +54,9 @@ export interface HandoverManagerEvents {
   handoverManager: { active: boolean; };
 }
 
+/** Worker-only inlet state, kept out of the shared connection parameter contract. */
+export type MqttWorkerParameters = IMqttParameters & { queuedHandoverQos0Input?: "held" | "open" };
+
 export interface IMqttWorkerData {
   managedInput?: boolean;
   publishQueue?: MqttPublishQueueOptions;
@@ -65,7 +68,7 @@ export interface IMqttWorkerData {
   persistToDisk?: boolean; // Whether to persist the queue to disk; default is false
   mqttHost: string; // MQTT broker host
   instanceNameWithSuffix: string; // Unique instance name for logging
-  mqttParameters?: IMqttParameters; // Additional parameters for the MQTT client  
+  mqttParameters?: MqttWorkerParameters; // Additional parameters for the MQTT client
   publisherActive: boolean; // Whether the publisher is active
   subscriberActive: boolean; // Whether the subscriber is active
   defaultPublishOptions?: IMqttPublishOptions; // Default publish options (QoS/retain/etc.)
